@@ -184,7 +184,8 @@ class KinematicsProcessor:
     
     # Additional helper functions to be implemented
     
-    def quaternion_to_euler(self, q: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
         """Convert quaternion to Euler angles (pitch, roll, yaw) in degrees.
 
         Input quaternion format: [w, x, y, z].
@@ -259,7 +260,8 @@ class KinematicsProcessor:
         else:
             raise ValueError("Input quaternion must have shape (4,) or (N,4)")
     
-    def quaternion_multiply(self, q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def quaternion_multiply(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
         """Multiply two quaternions (q1 * q2)
 
         Quaternions are expected in `[w, x, y, z]` format. Supports inputs of
@@ -317,7 +319,8 @@ class KinematicsProcessor:
 
         return np.vstack((w, x, y, z)).T
 
-    def quaternion_inverse(self, q: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def quaternion_inverse(q: np.ndarray) -> np.ndarray:
         """Compute quaternion inverse.
 
         For quaternion q = [w, x, y, z], the inverse is q^{-1} = q* / ||q||^2,
@@ -349,8 +352,8 @@ class KinematicsProcessor:
         else:
             raise ValueError("Input quaternion must have shape (4,) or (N,4)")
     
+    @staticmethod
     def compute_relative_orientation(
-        self, 
         q_proximal: np.ndarray, 
         q_distal: np.ndarray
     ) -> np.ndarray:
@@ -367,10 +370,10 @@ class KinematicsProcessor:
         qd = np.asarray(q_distal, dtype=float)
 
         # Compute inverse of proximal (handles both (4,) and (N,4))
-        qp_inv = self.quaternion_inverse(qp)
+        qp_inv = KinematicsProcessor.quaternion_inverse(qp)
 
         # Multiply: qp_inv * qd (broadcasting handled by quaternion_multiply)
-        q_rel = self.quaternion_multiply(qp_inv, qd)
+        q_rel = KinematicsProcessor.quaternion_multiply(qp_inv, qd)
 
         # Normalize result(s)
         q_rel = np.asarray(q_rel, dtype=float)
