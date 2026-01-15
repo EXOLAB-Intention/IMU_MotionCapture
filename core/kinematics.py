@@ -106,11 +106,14 @@ class KinematicsProcessor:
             
         Returns:
             (N, 3) array of trunk angles [pitch, roll, yaw] in degrees
-            
-        TODO: Implement ground reference frame estimation
         """
+        if not data.imu_data:
+            return None
         n_samples = len(data.imu_data['trunk'].timestamps)
-        return np.zeros((n_samples, 3))
+    
+        q_trunk = data.imu_data['trunk'].quaternions  # (N,4)
+        trunk_angles = self.quaternion_to_euler(q_trunk)  # (N,3)
+        return trunk_angles
     
     def detect_foot_contact(self, data: MotionCaptureData) -> Tuple[np.ndarray, np.ndarray]:
         """
