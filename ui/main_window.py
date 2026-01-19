@@ -45,7 +45,16 @@ class MainWindow(QMainWindow):
         menu_bar = self.menuBar()
         self.menu = MenuBar(menu_bar)
         
-        # Status bar
+        # Status bar with calibration indicator
+        self.calibration_status_label = QWidget()
+        from PyQt5.QtWidgets import QLabel as QStatusLabel
+        calib_layout = QHBoxLayout()
+        calib_layout.setContentsMargins(0, 0, 10, 0)
+        self.calib_indicator = QStatusLabel("⚫ No Calibration")
+        self.calib_indicator.setStyleSheet("color: #888; font-weight: bold;")
+        calib_layout.addWidget(self.calib_indicator)
+        self.calibration_status_label.setLayout(calib_layout)
+        self.statusBar().addPermanentWidget(self.calibration_status_label)
         self.statusBar().showMessage("Ready")
         
         # Main layout
@@ -80,6 +89,11 @@ class MainWindow(QMainWindow):
         self.menu.save_requested.connect(self.save_file)
         self.menu.save_as_requested.connect(self.save_file_as)
         self.menu.exit_requested.connect(self.close)
+        
+        # Calibration signals
+        self.menu.load_calibration_requested.connect(self.load_calibration)
+        self.menu.save_calibration_requested.connect(self.save_calibration)
+        self.menu.perform_calibration_requested.connect(self.perform_calibration)
         
         # Navigator signals
         self.navigator.file_selected.connect(self.load_selected_file)
@@ -219,25 +233,42 @@ class MainWindow(QMainWindow):
     
     @pyqtSlot()
     def process_data(self):
-        """Process current motion capture data"""
+        """Process current motion capture data using existing calibration"""
         if not self.current_data:
-            QMessageBox.warning(self, "No Data", "No data to process")
+            QMessageBox.warning(self, "No Data", "No data to process.\n\nLoad a motion trial first.")
             return
         
-        # TODO: Show calibration dialog to get calibration time range
-        # For now, use defaults
-        calibration_start = 0.0
-        calibration_end = 2.0
+        # Check if calibration is available
+        if not self.data_processor.calibration_processor.is_calibrated:
+            reply = QMessageBox.question(
+                self,
+                "No Calibration",
+                "No calibration data loaded.\n\n"
+                "Do you want to load a calibration file?\n"
+                "Or use 'Process > Perform Calibration' if this is a calibration trial.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            
+            if reply == QMessageBox.Yes:
+                # Trigger load calibration
+                self.menu._on_load_calibration()
+                # Check again after load attempt
+                if not self.data_processor.calibration_processor.is_calibrated:
+                    return
+            else:
+                return
         
         try:
-            self.statusBar().showMessage("Processing data...")
+            self.statusBar().showMessage("Processing data (using existing calibration)...")
             
-            # Process data
-            processed_data = self.data_processor.process_motion_data(
-                self.current_data,
-                calibration_start,
-                calibration_end
+            # Apply calibration to data first (if not already applied)
+            calibrated_data = self.data_processor.calibration_processor.apply_to_data(
+                self.current_data
             )
+            
+            # Compute kinematics only (no calibration step)
+            processed_data = self.data_processor.process_kinematics_only(calibrated_data)
             
             self.current_data = processed_data
             
@@ -249,7 +280,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Processing Complete",
-                "Motion data has been processed successfully.\n"
+                "Motion data has been processed successfully.\n\n"
+                f"Calibration: {self.data_processor.calibration_processor.pose_type}\n"
                 "Joint angles and kinematics have been computed."
             )
         
@@ -263,6 +295,145 @@ class MainWindow(QMainWindow):
         if self.current_data:
             self.current_data.notes = notes
             self.statusBar().showMessage("Notes updated", 2000)
+    
+    def _update_calibration_status(self):
+        """Update calibration status indicator in status bar"""
+        if self.data_processor.calibration_processor.is_calibrated:
+            pose_type = self.data_processor.calibration_processor.pose_type or "Unknown"
+            n_sensors = len(self.data_processor.calibration_processor.reference_orientations)
+            self.calib_indicator.setText(f"🟢 {pose_type} Calibration ({n_sensors} sensors)")
+            self.calib_indicator.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        else:
+            self.calib_indicator.setText("⚫ No Calibration")
+            self.calib_indicator.setStyleSheet("color: #888; font-weight: bold;")
+    
+    @pyqtSlot(str)
+    def load_calibration(self, filepath: str):
+        """Load calibration from file and apply to current data"""
+        try:
+            self.statusBar().showMessage(f"Loading calibration from {filepath}...")
+            
+            # Load calibration
+            self.data_processor.calibration_processor.load_calibration(filepath)
+            
+            # Apply to current data if available
+            if self.current_data:
+                reply = QMessageBox.question(
+                    self,
+                    "Apply Calibration",
+                    "Apply loaded calibration to current data?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                
+                if reply == QMessageBox.Yes:
+                    calibrated_data = self.data_processor.calibration_processor.apply_to_data(
+                        self.current_data
+                    )
+                    self.current_data = calibrated_data
+                    self.main_view.set_data(calibrated_data)
+                    self._update_calibration_status()
+                    self.statusBar().showMessage("Calibration applied", 3000)
+            else:
+                self._update_calibration_status()
+                self.statusBar().showMessage("Calibration loaded (no data to apply)", 3000)
+            
+            QMessageBox.information(
+                self,
+                "Calibration Loaded",
+                f"Calibration loaded successfully!\n"
+                f"Pose type: {self.data_processor.calibration_processor.pose_type}\n"
+                f"Sensors: {len(self.data_processor.calibration_processor.reference_orientations)}"
+            )
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Calibration Error", f"Failed to load calibration:\n{str(e)}")
+            self.statusBar().showMessage("Calibration load failed", 3000)
+    
+    @pyqtSlot(str)
+    def save_calibration(self, filepath: str):
+        """Save current calibration to file"""
+        try:
+            if not self.data_processor.calibration_processor.is_calibrated:
+                QMessageBox.warning(
+                    self,
+                    "No Calibration",
+                    "No calibration data available.\n"
+                    "Perform calibration first using 'Perform Calibration'."
+                )
+                return
+            
+            self.statusBar().showMessage(f"Saving calibration to {filepath}...")
+            self.data_processor.calibration_processor.save_calibration(filepath)
+            self.statusBar().showMessage(f"Calibration saved: {filepath}", 3000)
+            
+            QMessageBox.information(
+                self,
+                "Calibration Saved",
+                f"Calibration saved successfully to:\n{filepath}"
+            )
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save calibration:\n{str(e)}")
+            self.statusBar().showMessage("Calibration save failed", 3000)
+    
+    @pyqtSlot()
+    def perform_calibration(self):
+        """Perform calibration on current data (use entire duration)"""
+        if not self.current_data:
+            QMessageBox.warning(
+                self,
+                "No Data",
+                "Load calibration trial data first.\n"
+                "Use File > Import to load a N-pose or T-pose trial CSV."
+            )
+            return
+        
+        try:
+            # Use entire time range for calibration
+            start_time, end_time = self.current_data.get_time_range()
+            
+            # Ask for pose type
+            from PyQt5.QtWidgets import QInputDialog
+            pose_type, ok = QInputDialog.getItem(
+                self,
+                "Calibration Pose",
+                "Select calibration pose type:",
+                ["N-pose", "T-pose"],
+                0,
+                False
+            )
+            
+            if not ok:
+                return
+            
+            self.statusBar().showMessage("Performing calibration...")
+            
+            # Perform calibration
+            self.data_processor.calibration_processor.calibrate(
+                self.current_data,
+                start_time,
+                end_time,
+                pose_type
+            )
+            
+            self.statusBar().showMessage("Calibration complete", 3000)
+            
+            self._update_calibration_status()
+            
+            QMessageBox.information(
+                self,
+                "Calibration Complete",
+                f"Calibration performed successfully!\n\n"
+                f"Pose type: {pose_type}\n"
+                f"Duration: {end_time - start_time:.2f} seconds\n"
+                f"Sensors calibrated: {len(self.data_processor.calibration_processor.reference_orientations)}\n\n"
+                f"Use 'Process > Save Calibration' to save for later use."
+            )
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Calibration Error", f"Failed to perform calibration:\n{str(e)}")
+            self.statusBar().showMessage("Calibration failed", 3000)
     
     def closeEvent(self, event):
         """Handle window close event"""

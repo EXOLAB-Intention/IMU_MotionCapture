@@ -77,18 +77,21 @@ class FileHandler:
         df = pd.read_csv(filepath)
         n_samples = len(df)
         
-        # Create time array (assuming constant sampling rate)
-        # If there's a LoopCnt column, use it to generate time
+        # Create time array with 500Hz sampling rate
+        # Time starts at 0 seconds
         if 'LoopCnt' in df.columns:
             loop_cnt = df['LoopCnt'].values
-            # Estimate sampling frequency from loop counter
-            # Assuming 100Hz sampling rate (can be adjusted)
-            sampling_freq = 100.0
-            timestamps = loop_cnt / sampling_freq
+            # Actual sampling frequency: 500Hz
+            sampling_freq = 500.0
+            # Calculate timestamps and normalize to start at 0
+            timestamps = (loop_cnt - loop_cnt[0]) / sampling_freq
         else:
-            # Generate timestamps assuming 100Hz
-            sampling_freq = 100.0
+            # Generate timestamps starting at 0, assuming 500Hz
+            sampling_freq = 500.0
             timestamps = np.arange(n_samples) / sampling_freq
+        
+        print(f"  Sampling frequency: {sampling_freq} Hz")
+        print(f"  Time range: {timestamps[0]:.3f}s to {timestamps[-1]:.3f}s")
         
         # Sensor mapping
         sensor_configs = [
@@ -156,10 +159,11 @@ class FileHandler:
             accelerations = df[config['acc_cols']].values  # (N, 3)
             gyroscopes = df[config['gyr_cols']].values  # (N, 3)
             
-            # Check for valid data (non-zero)
-            if np.all(quaternions == 0):
-                print(f"Warning: Skipping {config['location']} - all zero data")
-                continue
+            # Fix trunk IMU: Replace all-zero quaternions with identity quaternion [1, 0, 0, 0]
+            # This prevents "zero norm" errors in quaternion operations
+            if config['location'] == 'trunk' and np.all(quaternions == 0):
+                print(f"  Note: Trunk quaternions are zero, replacing with identity [1,0,0,0]")
+                quaternions = np.tile([1.0, 0.0, 0.0, 0.0], (n_samples, 1))
             
             # Create IMUSensorData
             sensor_data = IMUSensorData(

@@ -15,6 +15,11 @@ class MenuBar(QObject):
     save_as_requested = pyqtSignal(str)  # filepath
     exit_requested = pyqtSignal()
     
+    # Calibration signals
+    load_calibration_requested = pyqtSignal(str)  # calibration filepath
+    save_calibration_requested = pyqtSignal(str)  # calibration filepath
+    perform_calibration_requested = pyqtSignal()  # perform calibration on current data
+    
     def __init__(self, menubar: QMenuBar):
         super().__init__()
         self.menubar = menubar
@@ -124,10 +129,34 @@ class MenuBar(QObject):
         """Create Process menu"""
         process_menu = self.menubar.addMenu('&Process')
         
-        # Set Calibration
-        calibration_action = QAction('Set &Calibration Period...', self.menubar)
-        calibration_action.setStatusTip('Define calibration pose time range')
+        # Load Calibration
+        load_calib_action = QAction('&Load Calibration...', self.menubar)
+        load_calib_action.setShortcut('Ctrl+L')
+        load_calib_action.setStatusTip('Load calibration from .cal file')
+        load_calib_action.triggered.connect(self._on_load_calibration)
+        process_menu.addAction(load_calib_action)
+        
+        # Save Calibration
+        save_calib_action = QAction('&Save Calibration...', self.menubar)
+        save_calib_action.setStatusTip('Save current calibration to .cal file')
+        save_calib_action.triggered.connect(self._on_save_calibration)
+        process_menu.addAction(save_calib_action)
+        
+        process_menu.addSeparator()
+        
+        # Perform Calibration
+        perform_calib_action = QAction('&Perform Calibration', self.menubar)
+        perform_calib_action.setShortcut('Ctrl+K')
+        perform_calib_action.setStatusTip('Perform calibration on current data (use entire duration)')
+        perform_calib_action.triggered.connect(self._on_perform_calibration)
+        process_menu.addAction(perform_calib_action)
+        
+        # Set Calibration Period
+        calibration_action = QAction('Set Calibration &Period...', self.menubar)
+        calibration_action.setStatusTip('Define specific calibration pose time range')
         process_menu.addAction(calibration_action)
+        
+        process_menu.addSeparator()
         
         # Configure Settings
         settings_action = QAction('&Settings...', self.menubar)
@@ -138,7 +167,7 @@ class MenuBar(QObject):
         process_menu.addSeparator()
         
         # Process Current
-        process_current = QAction('&Process Current File', self.menubar)
+        process_current = QAction('Process &Data', self.menubar)
         process_current.setShortcut('F5')
         process_current.setStatusTip('Process current motion capture data')
         process_menu.addAction(process_current)
@@ -206,6 +235,32 @@ class MenuBar(QObject):
     def _on_exit(self):
         """Handle Exit action"""
         self.exit_requested.emit()
+    
+    def _on_load_calibration(self):
+        """Handle Load Calibration action"""
+        filepath, _ = QFileDialog.getOpenFileName(
+            None,
+            "Load Calibration File",
+            "",
+            "Calibration Files (*.cal);;All Files (*)"
+        )
+        if filepath:
+            self.load_calibration_requested.emit(filepath)
+    
+    def _on_save_calibration(self):
+        """Handle Save Calibration action"""
+        filepath, _ = QFileDialog.getSaveFileName(
+            None,
+            "Save Calibration File",
+            "",
+            "Calibration Files (*.cal);;All Files (*)"
+        )
+        if filepath:
+            self.save_calibration_requested.emit(filepath)
+    
+    def _on_perform_calibration(self):
+        """Handle Perform Calibration action"""
+        self.perform_calibration_requested.emit()
     
     def _on_about(self):
         """Handle About action"""

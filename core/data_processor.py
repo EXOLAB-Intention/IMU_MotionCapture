@@ -99,6 +99,74 @@ class DataProcessor:
         print("Processing complete!")
         return data
     
+    def process_kinematics_only(self, data: MotionCaptureData) -> MotionCaptureData:
+        """
+        Process kinematics without performing calibration
+        Use this when calibration is already loaded separately
+        
+        Args:
+            data: Motion capture data (should already be calibrated)
+            
+        Returns:
+            Processed MotionCaptureData with joint angles and kinematics
+        """
+        print(f"Processing kinematics for session: {data.session_id}")
+        print("Note: Using existing calibration (no calibration step)")
+        
+        # Get reference timestamps from first available sensor
+        first_sensor = next(iter(data.imu_data.values()))
+        timestamps = first_sensor.timestamps
+        n_samples = len(timestamps)
+        
+        # Step 1: Compute joint angles
+        print("Step 1: Computing joint angles...")
+        joint_angles = self.kinematics_processor.compute_joint_angles(data)
+        data.joint_angles = joint_angles
+        
+        # Step 2: Compute trunk orientation
+        print("Step 2: Computing trunk orientation...")
+        trunk_angle = self.kinematics_processor.compute_trunk_angle(data)
+        
+        # Step 3: Detect foot contacts
+        print("Step 3: Detecting foot contacts...")
+        foot_contact_right, foot_contact_left = self.kinematics_processor.detect_foot_contact(data)
+        
+        # Step 4: Compute velocity
+        print("Step 4: Computing trunk velocity...")
+        trunk_velocity, trunk_speed = self.kinematics_processor.compute_velocity(
+            data, 
+            foot_contact_right, 
+            foot_contact_left
+        )
+        
+        # Step 5: Detect strides
+        print("Step 5: Detecting strides...")
+        stride_times_right, stride_times_left = self.kinematics_processor.detect_strides(
+            foot_contact_right, 
+            foot_contact_left,
+            timestamps
+        )
+        
+        # Assemble kinematics data
+        data.kinematics = KinematicsData(
+            timestamps=timestamps,
+            trunk_angle=trunk_angle,
+            foot_contact_right=foot_contact_right,
+            foot_contact_left=foot_contact_left,
+            trunk_velocity=trunk_velocity,
+            trunk_speed=trunk_speed,
+            stride_times_right=stride_times_right,
+            stride_times_left=stride_times_left
+        )
+        
+        # Mark as processed
+        data.is_processed = True
+        data.processing_timestamp = datetime.now()
+        data.calibration_pose = self.calibration_processor.pose_type
+        
+        print("Kinematics processing complete!")
+        return data
+    
     def batch_process(
         self,
         data_list: list,

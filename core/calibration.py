@@ -3,6 +3,9 @@ Calibration processor for IMU motion capture
 Handles initial pose calibration (T-pose, N-pose) to establish reference frames
 """
 import numpy as np
+import json
+from pathlib import Path
+from datetime import datetime
 from typing import Optional, Dict
 
 from core.imu_data import MotionCaptureData, IMUSensorData
@@ -12,9 +15,14 @@ from core.kinematics import KinematicsProcessor
 class CalibrationProcessor:
     """Processes calibration poses to establish reference orientations"""
     
+    CALIBRATION_EXTENSION = '.cal'
+    
     def __init__(self):
         self.reference_orientations: Dict[str, np.ndarray] = {}
         self.is_calibrated = False
+        self.pose_type: Optional[str] = None
+        self.calibration_time: Optional[datetime] = None
+        self.subject_id: Optional[str] = None
     
     def calibrate(
         self, 
@@ -51,6 +59,11 @@ class CalibrationProcessor:
             print(f"  {location}: reference orientation established")
         
         self.is_calibrated = True
+        self.pose_type = pose_type
+        self.calibration_time = datetime.now()
+        data.calibration_pose = pose_type
+        data.calibration_duration = end_time - start_time
+        data.calibration_start_time = start_time
         print("Calibration complete!")
     
     def _average_quaternions(self, quaternions: np.ndarray) -> np.ndarray:
@@ -124,3 +137,102 @@ class CalibrationProcessor:
                 return False
         
         return True
+    
+    def save_calibration(self, filepath: str):
+        """
+        Save calibration data to file
+        
+        Args:
+            filepath: Path to save calibration file (.cal extension)
+        """
+        if not self.is_calibrated:
+            raise ValueError("No calibration data to save. Perform calibration first.")
+        
+        # Ensure .cal extension
+        filepath = str(Path(filepath).with_suffix(self.CALIBRATION_EXTENSION))
+        
+        # Prepare calibration data
+        calib_data = {
+            'version': '1.0',
+            'pose_type': self.pose_type,
+            'calibration_time': self.calibration_time.isoformat() if self.calibration_time else None,
+            'subject_id': self.subject_id,
+            'reference_orientations': {}
+        }
+        
+        # Convert numpy arrays to lists for JSON serialization
+        for location, quat in self.reference_orientations.items():
+            calib_data['reference_orientations'][location] = quat.tolist()
+        
+        # Save to file
+        with open(filepath, 'w') as f:
+            json.dump(calib_data, f, indent=2)
+        
+        print(f"Calibration saved to: {filepath}")
+    
+    def load_calibration(self, filepath: str):
+        """
+        Load calibration data from file
+        
+        Args:
+            filepath: Path to calibration file (.cal)
+        """
+        with open(filepath, 'r') as f:
+            calib_data = json.load(f)
+        
+        # Load reference orientations
+        self.reference_orientations = {}
+        for location, quat_list in calib_data['reference_orientations'].items():
+            self.reference_orientations[location] = np.array(quat_list)
+        
+        self.pose_type = calib_data.get('pose_type')
+        self.subject_id = calib_data.get('subject_id')
+        
+        if calib_data.get('calibration_time'):
+            self.calibration_time = datetime.fromisoformat(calib_data['calibration_time'])
+        
+        self.is_calibrated = True
+        print(f"Calibration loaded from: {filepath}")
+        print(f"  Pose type: {self.pose_type}")
+        print(f"  Sensors: {list(self.reference_orientations.keys())}")
+    
+    def apply_to_data(self, data: MotionCaptureData) -> MotionCaptureData:
+        """
+        Apply calibration to motion capture data
+        
+        Args:
+            data: Motion capture data to calibrate
+            
+        Returns:
+            Calibrated motion capture data
+        """
+        if not self.is_calibrated:
+            raise ValueError("No calibration loaded. Load calibration first.")
+        
+        print(f"Applying calibration to data: {data.session_id}")
+        
+        # Create calibrated copy
+        from copy import deepcopy
+        calibrated_data = deepcopy(data)
+        
+        # Apply calibration to each sensor
+        for location, sensor_data in calibrated_data.imu_data.items():
+            if location not in self.reference_orientations:
+                print(f"  Warning: No calibration reference for {location}, skipping")
+                continue
+            
+            # Apply calibration to all quaternions
+            n_samples = len(sensor_data.quaternions)
+            for i in range(n_samples):
+                sensor_data.quaternions[i] = self.apply_calibration(
+                    sensor_data.quaternions[i], 
+                    location
+                )
+            
+            print(f"  Calibrated {location}: {n_samples} samples")
+        
+        # Mark as calibrated
+        calibrated_data.calibration_pose = self.pose_type
+        
+        print("Calibration applied successfully!")
+        return calibrated_data

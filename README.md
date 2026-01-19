@@ -52,14 +52,37 @@ python main.py
 
 ## 기본 사용법
 
+### Calibration 워크플로우 (중요!)
+
+**권장 방법: 별도 Calibration Trial 사용**
+
+1. **Calibration Trial 생성**
+   - N-pose 또는 T-pose를 4~5초간 유지한 trial 수행
+   - `File > Import`로 calibration trial CSV 로드
+   - `Process > Perform Calibration` (Ctrl+K)
+   - Pose 타입 선택 후 calibration 수행
+   - `Process > Save Calibration`으로 `.cal` 파일 저장
+
+2. **동작 Trial 처리**
+   - `File > Import`로 동작 trial CSV 로드
+   - `Process > Load Calibration` (Ctrl+L)로 `.cal` 파일 로드
+   - "Apply to current data?" 확인 시 **Yes** 선택
+   - `Process > Process Data` (F5)로 관절각 계산
+   - `File > Save`로 결과 저장
+
+📘 자세한 내용은 **[CALIBRATION_WORKFLOW.md](CALIBRATION_WORKFLOW.md)** 참고
+
+### 기본 처리 흐름
+
 1. **File > Import**: CSV 파일 불러오기
    - 자동으로 센서 위치별 데이터 파싱
    - 누락된 센서나 0값 데이터는 자동 건너뜀
    
-2. **캘리브레이션 구간 선택** (T-pose/N-pose)
-   - 타임라인에서 시작/종료 시간 선택
+2. **Calibration 적용**
+   - 방법 1: Load Calibration (권장)
+   - 방법 2: Set Calibration Period (같은 trial 내)
    
-3. **Process > Process Data**: 처리 실행
+3. **Process > Process Data**: 처리 실행 (F5)
    - 관절각 계산 (구현 예정)
    - 발 접지 감지 (구현 예정)
    
@@ -69,11 +92,22 @@ python main.py
    
 5. **File > Save**: 처리 결과 저장 (.mcp 형식)
 
+### 단축키
+- `Ctrl+I`: Import raw data
+- `Ctrl+L`: Load calibration
+- `Ctrl+K`: Perform calibration
+- `Ctrl+S`: Save processed data
+- `F5`: Process data
+
 ## 주요 기능
 
 ✓ **완료된 기능**:
 - GUI 프레임워크 (PyQt5)
 - CSV 파일 Import (센서별 자동 파싱)
+- **Calibration 시스템**:
+  - Calibration trial 처리 (N-pose/T-pose)
+  - Calibration 파일 저장/로드 (.cal)
+  - 다른 trial에 calibration 적용
 - 파일 관리 (Import/Open/Save)
 - 배치 처리 지원
 - 시간 구간 선택 및 부분 저장
@@ -84,6 +118,20 @@ python main.py
 - `core/kinematics.py`: Quaternion 기반 관절각 계산 알고리즘
 - `ui/visualization_3d.py`: OpenGL/PyQtGraph 3D 렌더링
 - 발 접지 감지 및 보행 분석
+
+## 주요 특징
+
+### Calibration 관리
+- ✅ 별도 calibration trial 지원
+- ✅ `.cal` 파일로 재사용 가능
+- ✅ 여러 동작 trial에 동일 calibration 적용
+- ✅ Subject/Session별 calibration 관리
+
+### 데이터 처리
+- ✅ Trunk IMU = 0 지원 (정상 동작)
+- ✅ 6개 다리 센서 처리 (thigh/shank/foot × 2)
+- ⏳ Quaternion 기반 관절각 계산
+- ⏳ 보행 분석 (stride detection, velocity)
 
 ## 테스트
 
