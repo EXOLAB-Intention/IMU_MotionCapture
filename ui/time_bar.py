@@ -3,7 +3,7 @@ Time bar widget for selecting time ranges
 """
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QSlider, QPushButton, QDoubleSpinBox
+    QSlider, QPushButton, QDoubleSpinBox, QComboBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 import numpy as np
@@ -15,11 +15,13 @@ class TimeBar(QWidget):
     # Signals
     time_changed = pyqtSignal(float)  # current time in seconds
     range_changed = pyqtSignal(float, float)  # start_time, end_time
+    speed_changed = pyqtSignal(float)  # playback speed multiplier
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.total_duration = 0.0
         self.sampling_frequency = 1000.0
+        self._updating = False  # Flag to prevent recursive signal loops
         self._init_ui()
     
     def _init_ui(self):
@@ -85,19 +87,17 @@ class TimeBar(QWidget):
         
         layout.addLayout(range_layout)
         
-        # Playback rate
+        # Playback speed
         playback_layout = QHBoxLayout()
         
         playback_label = QLabel("Playback Speed:")
-        self.speed_combo = QSlider(Qt.Horizontal)
-        self.speed_combo.setMinimum(1)
-        self.speed_combo.setMaximum(10)
-        self.speed_combo.setValue(5)
-        self.speed_label = QLabel("1.0x")
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["0.25x", "0.5x", "0.75x", "1x", "1.5x", "2x", "5x"])
+        self.speed_combo.setCurrentText("1x")  # Default to real-time
+        self.speed_combo.currentTextChanged.connect(self._on_speed_changed)
         
         playback_layout.addWidget(playback_label)
         playback_layout.addWidget(self.speed_combo)
-        playback_layout.addWidget(self.speed_label)
         playback_layout.addStretch()
         
         layout.addLayout(playback_layout)
@@ -124,6 +124,8 @@ class TimeBar(QWidget):
     
     def _on_slider_changed(self, value: int):
         """Handle slider value change"""
+        if self._updating:
+            return
         if self.total_duration > 0:
             time = value / self.time_slider.maximum() * self.total_duration
             self._update_time_label()
@@ -159,6 +161,16 @@ class TimeBar(QWidget):
         duration = self.end_spin.value() - self.start_spin.value()
         self.duration_label.setText(f"Duration: {duration:.3f} s")
     
+    def _on_speed_changed(self, text: str):
+        """Handle playback speed change"""
+        # Extract numeric value from text (e.g., "1.5x" -> 1.5)
+        speed_str = text.replace('x', '')
+        try:
+            speed = float(speed_str)
+            self.speed_changed.emit(speed)
+        except ValueError:
+            pass
+    
     def _select_all(self):
         """Select entire time range"""
         self.start_spin.setValue(0.0)
@@ -179,7 +191,12 @@ class TimeBar(QWidget):
         """Set current time position"""
         if self.total_duration > 0:
             value = int(time / self.total_duration * self.time_slider.maximum())
+            # Block signals to prevent recursive loop
+            self.time_slider.blockSignals(True)
             self.time_slider.setValue(value)
+            self.time_slider.blockSignals(False)
+            # Update label
+            self.time_label.setText(f"{time:.3f} s")
     
     def reset(self):
         """Reset time bar to initial state"""

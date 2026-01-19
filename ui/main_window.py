@@ -300,7 +300,7 @@ class MainWindow(QMainWindow):
         """Update calibration status indicator in status bar"""
         if self.data_processor.calibration_processor.is_calibrated:
             pose_type = self.data_processor.calibration_processor.pose_type or "Unknown"
-            n_sensors = len(self.data_processor.calibration_processor.reference_orientations)
+            n_sensors = len(self.data_processor.calibration_processor.correction_quaternions)
             self.calib_indicator.setText(f"🟢 {pose_type} Calibration ({n_sensors} sensors)")
             self.calib_indicator.setStyleSheet("color: #4CAF50; font-weight: bold;")
         else:
@@ -343,7 +343,7 @@ class MainWindow(QMainWindow):
                 "Calibration Loaded",
                 f"Calibration loaded successfully!\n"
                 f"Pose type: {self.data_processor.calibration_processor.pose_type}\n"
-                f"Sensors: {len(self.data_processor.calibration_processor.reference_orientations)}"
+                f"Sensors: {len(self.data_processor.calibration_processor.correction_quaternions)}"
             )
         
         except Exception as e:
@@ -427,7 +427,7 @@ class MainWindow(QMainWindow):
                 f"Calibration performed successfully!\n\n"
                 f"Pose type: {pose_type}\n"
                 f"Duration: {end_time - start_time:.2f} seconds\n"
-                f"Sensors calibrated: {len(self.data_processor.calibration_processor.reference_orientations)}\n\n"
+                f"Sensors calibrated: {len(self.data_processor.calibration_processor.correction_quaternions)}\n\n"
                 f"Use 'Process > Save Calibration' to save for later use."
             )
         

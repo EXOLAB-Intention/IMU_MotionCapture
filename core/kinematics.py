@@ -33,59 +33,85 @@ class KinematicsProcessor:
     
     def compute_joint_angles(self, data: MotionCaptureData) -> JointAngles:
         """
-        Compute 3D joint angles from IMU quaternions
+        Compute 3D joint angles from IMU quaternions following MATLAB workflow.
         
-        Logic:
-            Joint Angle = Relative orientation of Distal segment w.r.t Proximal segment
-            q_rel = q_proximal^{-1} * q_distal
+        Logic (from MATLAB):
+            1. Normalize quaternions for each segment
+            2. Compute relative orientation: q_rel = quatmultiply(quatconj(q_proximal), q_distal)
+            3. Convert to Euler angles (ZYX order): [yaw, pitch, roll]
+            4. Convert to degrees
+        
+        Joint definitions:
+            - Hip: trunk (proximal) → thigh (distal)
+            - Knee: thigh (proximal) → shank (distal)
+            - Ankle: shank (proximal) → foot (distal)
 
         Args:
             data: Calibrated motion capture data
             
         Returns:
-            JointAngles object with hip, knee, ankle angles
+            JointAngles object with hip, knee, ankle angles [pitch, roll, yaw] in degrees
         """
 
-        # 1. Set reference timestamp (trunk IMU timestamps)
+        # 1. Check data availability
         if not data.imu_data:
             return None
-        # Placeholder implementation
+        
+        # 2. Set reference timestamp (trunk IMU timestamps)
         n_samples = len(data.imu_data['trunk'].timestamps)
         timestamps = data.imu_data['trunk'].timestamps
 
-        #2. Helper function to calculate joint angle between two segments
+        # 3. Helper function to calculate joint angle between two segments
         def calculate_angle(proximal_name: str, distal_name: str) -> np.ndarray:
-            """Calculate joint angle time series between two segments"""
+            """
+            Calculate joint angle time series between two segments.
+            Follows MATLAB workflow: quatmultiply(quatconj(q_proximal), q_distal) → quat2eul → degrees
+            """
             if proximal_name in data.imu_data and distal_name in data.imu_data:
-                q_proximal = data.imu_data[proximal_name].quaternions  # (N,4)
-                q_distal = data.imu_data[distal_name].quaternions      # (N,4)
+                q_proximal = data.imu_data[proximal_name].quaternions  # (N,4) [w,x,y,z]
+                q_distal = data.imu_data[distal_name].quaternions      # (N,4) [w,x,y,z]
 
+                # Ensure same length
                 min_len = min(len(q_proximal), len(q_distal), n_samples)
                 q_proximal = q_proximal[:min_len]
                 q_distal = q_distal[:min_len]
 
-                # Compute relative orientation
-                q_rel = self.compute_relative_orientation(q_proximal, q_distal)  # (min_len,4)
+                # Normalize quaternions (equivalent to MATLAB quatnormalize)
+                q_proximal_norm = q_proximal / np.linalg.norm(q_proximal, axis=1, keepdims=True)
+                q_distal_norm = q_distal / np.linalg.norm(q_distal, axis=1, keepdims=True)
+
+                # Compute relative orientation: q_rel = q_proximal^{-1} * q_distal
+                # This matches MATLAB: quatmultiply(quatconj(q_proximal), q_distal)
+                q_rel = self.compute_relative_orientation(q_proximal_norm, q_distal_norm)  # (N,4)
                 
-                # Convert to Euler angles
-                angles = self.quaternion_to_euler(q_rel)    # (N,3) [pitch, roll, yaw]
+                # Convert to Euler angles [pitch, roll, yaw] in degrees
+                # quaternion_to_euler follows ZYX convention matching MATLAB quat2eul(q, 'ZYX')
+                angles = self.quaternion_to_euler(q_rel)  # (N,3) [pitch, roll, yaw] in degrees
+                
+                # Pad to n_samples if needed
+                if len(angles) < n_samples:
+                    padding = np.zeros((n_samples - len(angles), 3))
+                    angles = np.vstack([angles, padding])
                 
                 return angles
             else:
-                return np.zeros((n_samples, 3))  # Default zero angles if data missing
+                # Return zero angles if data missing
+                return np.zeros((n_samples, 3))
 
-        #3. Calculate joint angles
-        # Hip: Trunk -> Thigh
+        # 4. Calculate joint angles for all joints
+        # Hip: Trunk (proximal) → Thigh (distal)
         hip_right = calculate_angle('trunk', 'thigh_right')
         hip_left = calculate_angle('trunk', 'thigh_left')
-        # Knee: Thigh -> Shank
+        
+        # Knee: Thigh (proximal) → Shank (distal)
         knee_right = calculate_angle('thigh_right', 'shank_right')
         knee_left = calculate_angle('thigh_left', 'shank_left')
-        # Ankle: Shank -> Foot
+        
+        # Ankle: Shank (proximal) → Foot (distal)
         ankle_right = calculate_angle('shank_right', 'foot_right')
         ankle_left = calculate_angle('shank_left', 'foot_left')
 
-        #4. Create dummy data (zeros)
+        # 5. Create JointAngles object
         joint_angles = JointAngles(
             timestamps=timestamps,
             hip_right=hip_right,
