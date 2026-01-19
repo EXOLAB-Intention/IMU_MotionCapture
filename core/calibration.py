@@ -6,6 +6,7 @@ import numpy as np
 from typing import Optional, Dict
 
 from core.imu_data import MotionCaptureData, IMUSensorData
+from core.kinematics import KinematicsProcessor
 
 
 class CalibrationProcessor:
@@ -61,15 +62,14 @@ class CalibrationProcessor:
             
         Returns:
             (4,) averaged quaternion
-            
-        Note:
-            TODO: Implement proper quaternion averaging (e.g., using eigenvalue method)
-            Currently using simple mean normalization as placeholder
         """
         # Placeholder: simple mean and normalize
-        mean_quat = np.mean(quaternions, axis=0)
-        mean_quat = mean_quat / np.linalg.norm(mean_quat)
-        return mean_quat
+        if len(quaternions) == 0:
+            raise ValueError("No quaternions provided for averaging")
+        M = np.dot(quaternions.T, quaternions)
+        eigenvalues, eigenvectors = np.linalg.eigh(M)
+        avg_quat = eigenvectors[:, np.argmax(eigenvalues)]
+        return avg_quat / np.linalg.norm(avg_quat)
     
     def get_reference_orientation(self, location: str) -> Optional[np.ndarray]:
         """Get reference orientation for a sensor location"""
@@ -89,11 +89,11 @@ class CalibrationProcessor:
         if not self.is_calibrated or location not in self.reference_orientations:
             return quaternion
         
-        # TODO: Implement proper quaternion transformation
-        # q_calibrated = q_current * q_reference_inverse
-        
-        return quaternion
-    
+        q_ref = self.reference_orientations[location]
+        q_calibrated = KinematicsProcessor.compute_relative_orientation(q_ref, quaternion)
+
+        return q_calibrated
+
     def validate_calibration_pose(
         self, 
         data: MotionCaptureData, 

@@ -35,29 +35,66 @@ class KinematicsProcessor:
         """
         Compute 3D joint angles from IMU quaternions
         
+        Logic:
+            Joint Angle = Relative orientation of Distal segment w.r.t Proximal segment
+            q_rel = q_proximal^{-1} * q_distal
+
         Args:
             data: Calibrated motion capture data
             
         Returns:
             JointAngles object with hip, knee, ankle angles
-            
-        TODO: Implement quaternion-based joint angle computation
         """
+
+        # 1. Set reference timestamp (trunk IMU timestamps)
+        if not data.imu_data:
+            return None
         # Placeholder implementation
         n_samples = len(data.imu_data['trunk'].timestamps)
         timestamps = data.imu_data['trunk'].timestamps
-        
-        # Create dummy data (zeros)
+
+        #2. Helper function to calculate joint angle between two segments
+        def calculate_angle(proximal_name: str, distal_name: str) -> np.ndarray:
+            """Calculate joint angle time series between two segments"""
+            if proximal_name in data.imu_data and distal_name in data.imu_data:
+                q_proximal = data.imu_data[proximal_name].quaternions  # (N,4)
+                q_distal = data.imu_data[distal_name].quaternions      # (N,4)
+
+                min_len = min(len(q_proximal), len(q_distal), n_samples)
+                q_proximal = q_proximal[:min_len]
+                q_distal = q_distal[:min_len]
+
+                # Compute relative orientation
+                q_rel = self.compute_relative_orientation(q_proximal, q_distal)  # (min_len,4)
+                
+                # Convert to Euler angles
+                angles = self.quaternion_to_euler(q_rel)    # (N,3) [pitch, roll, yaw]
+                
+                return angles
+            else:
+                return np.zeros((n_samples, 3))  # Default zero angles if data missing
+
+        #3. Calculate joint angles
+        # Hip: Trunk -> Thigh
+        hip_right = calculate_angle('trunk', 'thigh_right')
+        hip_left = calculate_angle('trunk', 'thigh_left')
+        # Knee: Thigh -> Shank
+        knee_right = calculate_angle('thigh_right', 'shank_right')
+        knee_left = calculate_angle('thigh_left', 'shank_left')
+        # Ankle: Shank -> Foot
+        ankle_right = calculate_angle('shank_right', 'foot_right')
+        ankle_left = calculate_angle('shank_left', 'foot_left')
+
+        #4. Create dummy data (zeros)
         joint_angles = JointAngles(
             timestamps=timestamps,
-            hip_right=np.zeros((n_samples, 3)),
-            hip_left=np.zeros((n_samples, 3)),
-            knee_right=np.zeros((n_samples, 3)),
-            knee_left=np.zeros((n_samples, 3)),
-            ankle_right=np.zeros((n_samples, 3)),
-            ankle_left=np.zeros((n_samples, 3))
+            hip_right=hip_right,
+            hip_left=hip_left,
+            knee_right=knee_right,
+            knee_left=knee_left,
+            ankle_right=ankle_right,
+            ankle_left=ankle_left
         )
-        
         return joint_angles
     
     def compute_trunk_angle(self, data: MotionCaptureData) -> np.ndarray:
@@ -69,11 +106,14 @@ class KinematicsProcessor:
             
         Returns:
             (N, 3) array of trunk angles [pitch, roll, yaw] in degrees
-            
-        TODO: Implement ground reference frame estimation
         """
+        if not data.imu_data:
+            return None
         n_samples = len(data.imu_data['trunk'].timestamps)
-        return np.zeros((n_samples, 3))
+    
+        q_trunk = data.imu_data['trunk'].quaternions  # (N,4)
+        trunk_angles = self.quaternion_to_euler(q_trunk)  # (N,3)
+        return trunk_angles
     
     def detect_foot_contact(self, data: MotionCaptureData) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -144,7 +184,8 @@ class KinematicsProcessor:
     
     # Additional helper functions to be implemented
     
-    def quaternion_to_euler(self, q: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
         """Convert quaternion to Euler angles (pitch, roll, yaw) in degrees.
 
         Input quaternion format: [w, x, y, z].
@@ -219,7 +260,8 @@ class KinematicsProcessor:
         else:
             raise ValueError("Input quaternion must have shape (4,) or (N,4)")
     
-    def quaternion_multiply(self, q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def quaternion_multiply(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
         """Multiply two quaternions (q1 * q2)
 
         Quaternions are expected in `[w, x, y, z]` format. Supports inputs of
@@ -277,7 +319,8 @@ class KinematicsProcessor:
 
         return np.vstack((w, x, y, z)).T
 
-    def quaternion_inverse(self, q: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def quaternion_inverse(q: np.ndarray) -> np.ndarray:
         """Compute quaternion inverse.
 
         For quaternion q = [w, x, y, z], the inverse is q^{-1} = q* / ||q||^2,
@@ -309,8 +352,8 @@ class KinematicsProcessor:
         else:
             raise ValueError("Input quaternion must have shape (4,) or (N,4)")
     
+    @staticmethod
     def compute_relative_orientation(
-        self, 
         q_proximal: np.ndarray, 
         q_distal: np.ndarray
     ) -> np.ndarray:
@@ -327,10 +370,10 @@ class KinematicsProcessor:
         qd = np.asarray(q_distal, dtype=float)
 
         # Compute inverse of proximal (handles both (4,) and (N,4))
-        qp_inv = self.quaternion_inverse(qp)
+        qp_inv = KinematicsProcessor.quaternion_inverse(qp)
 
         # Multiply: qp_inv * qd (broadcasting handled by quaternion_multiply)
-        q_rel = self.quaternion_multiply(qp_inv, qd)
+        q_rel = KinematicsProcessor.quaternion_multiply(qp_inv, qd)
 
         # Normalize result(s)
         q_rel = np.asarray(q_rel, dtype=float)
