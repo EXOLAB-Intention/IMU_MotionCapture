@@ -15,7 +15,7 @@ Features:
 - Time-series graph plotting
 - Batch processing support
 
-Author: Motion Capture Lab
+Author: EXO Lab, KAIST
 Version: 1.0.0
 """
 
@@ -36,7 +36,7 @@ def main():
     # Create application
     app = QApplication(sys.argv)
     app.setApplicationName("IMU Motion Capture")
-    app.setOrganizationName("Motion Capture Lab")
+    app.setOrganizationName("EXO Lab")
     
     # Set application style
     app.setStyle("Fusion")
