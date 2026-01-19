@@ -51,9 +51,19 @@ class FileHandler:
     
     @staticmethod
     def _import_csv(filepath: str) -> MotionCaptureData:
-        """Import CSV format (placeholder)"""
-        # TODO: Implement CSV parsing
-        # Expected columns: timestamp, sensor_id, qw, qx, qy, qz, ax, ay, az, gx, gy, gz
+        """
+        Import CSV format with IMU data
+        
+        CSV Format:
+        - TrunkIMU: TrunkIMU_LocalAccX/Y/Z, TrunkIMU_LocalGyrX/Y/Z, TrunkIMU_QuatW/X/Y/Z
+        - Left Thigh: L_THIGH_IMU_QuatW/X/Y/Z, L_THIGH_IMU_AccX/Y/Z, L_THIGH_IMU_GyrX/Y/Z
+        - Left Shank: L_SHANK_IMU_QuatW/X/Y/Z, L_SHANK_IMU_AccX/Y/Z, L_SHANK_IMU_GyrX/Y/Z
+        - Left Foot: L_FOOT_IMU_QuatW/X/Y/Z, L_FOOT_IMU_AccX/Y/Z, L_FOOT_IMU_GyrX/Y/Z
+        - Right Thigh: R_THIGH_IMU_QuatW/X/Y/Z, R_THIGH_IMU_AccX/Y/Z, R_THIGH_IMU_GyrX/Y/Z
+        - Right Shank: R_SHANK_IMU_QuatW/X/Y/Z, R_SHANK_IMU_AccX/Y/Z, R_SHANK_IMU_GyrX/Y/Z
+        - Right Foot: R_FOOT_IMU_QuatW/X/Y/Z, R_FOOT_IMU_AccX/Y/Z, R_FOOT_IMU_GyrX/Y/Z
+        """
+        import pandas as pd
         
         session_id = Path(filepath).stem
         data = MotionCaptureData(
@@ -61,9 +71,111 @@ class FileHandler:
             creation_time=datetime.now()
         )
         
-        # Placeholder: would parse CSV and populate IMU data
         print(f"Importing CSV from {filepath}")
         
+        # Read CSV file
+        df = pd.read_csv(filepath)
+        n_samples = len(df)
+        
+        # Create time array (assuming constant sampling rate)
+        # If there's a LoopCnt column, use it to generate time
+        if 'LoopCnt' in df.columns:
+            loop_cnt = df['LoopCnt'].values
+            # Estimate sampling frequency from loop counter
+            # Assuming 100Hz sampling rate (can be adjusted)
+            sampling_freq = 100.0
+            timestamps = loop_cnt / sampling_freq
+        else:
+            # Generate timestamps assuming 100Hz
+            sampling_freq = 100.0
+            timestamps = np.arange(n_samples) / sampling_freq
+        
+        # Sensor mapping
+        sensor_configs = [
+            {
+                'location': 'trunk',
+                'sensor_id': 0,
+                'quat_cols': ['TrunkIMU_QuatW', 'TrunkIMU_QuatX', 'TrunkIMU_QuatY', 'TrunkIMU_QuatZ'],
+                'acc_cols': ['TrunkIMU_LocalAccX', 'TrunkIMU_LocalAccY', 'TrunkIMU_LocalAccZ'],
+                'gyr_cols': ['TrunkIMU_LocalGyrX', 'TrunkIMU_LocalGyrY', 'TrunkIMU_LocalGyrZ']
+            },
+            {
+                'location': 'thigh_left',
+                'sensor_id': 1,
+                'quat_cols': ['L_THIGH_IMU_QuatW', 'L_THIGH_IMU_QuatX', 'L_THIGH_IMU_QuatY', 'L_THIGH_IMU_QuatZ'],
+                'acc_cols': ['L_THIGH_IMU_AccX', 'L_THIGH_IMU_AccY', 'L_THIGH_IMU_AccZ'],
+                'gyr_cols': ['L_THIGH_IMU_GyrX', 'L_THIGH_IMU_GyrY', 'L_THIGH_IMU_GyrZ']
+            },
+            {
+                'location': 'shank_left',
+                'sensor_id': 2,
+                'quat_cols': ['L_SHANK_IMU_QuatW', 'L_SHANK_IMU_QuatX', 'L_SHANK_IMU_QuatY', 'L_SHANK_IMU_QuatZ'],
+                'acc_cols': ['L_SHANK_IMU_AccX', 'L_SHANK_IMU_AccY', 'L_SHANK_IMU_AccZ'],
+                'gyr_cols': ['L_SHANK_IMU_GyrX', 'L_SHANK_IMU_GyrY', 'L_SHANK_IMU_GyrZ']
+            },
+            {
+                'location': 'foot_left',
+                'sensor_id': 3,
+                'quat_cols': ['L_FOOT_IMU_QuatW', 'L_FOOT_IMU_QuatX', 'L_FOOT_IMU_QuatY', 'L_FOOT_IMU_QuatZ'],
+                'acc_cols': ['L_FOOT_IMU_AccX', 'L_FOOT_IMU_AccY', 'L_FOOT_IMU_AccZ'],
+                'gyr_cols': ['L_FOOT_IMU_GyrX', 'L_FOOT_IMU_GyrY', 'L_FOOT_IMU_GyrZ']
+            },
+            {
+                'location': 'thigh_right',
+                'sensor_id': 4,
+                'quat_cols': ['R_THIGH_IMU_QuatW', 'R_THIGH_IMU_QuatX', 'R_THIGH_IMU_QuatY', 'R_THIGH_IMU_QuatZ'],
+                'acc_cols': ['R_THIGH_IMU_AccX', 'R_THIGH_IMU_AccY', 'R_THIGH_IMU_AccZ'],
+                'gyr_cols': ['R_THIGH_IMU_GyrX', 'R_THIGH_IMU_GyrY', 'R_THIGH_IMU_GyrZ']
+            },
+            {
+                'location': 'shank_right',
+                'sensor_id': 5,
+                'quat_cols': ['R_SHANK_IMU_QuatW', 'R_SHANK_IMU_QuatX', 'R_SHANK_IMU_QuatY', 'R_SHANK_IMU_QuatZ'],
+                'acc_cols': ['R_SHANK_IMU_AccX', 'R_SHANK_IMU_AccY', 'R_SHANK_IMU_AccZ'],
+                'gyr_cols': ['R_SHANK_IMU_GyrX', 'R_SHANK_IMU_GyrY', 'R_SHANK_IMU_GyrZ']
+            },
+            {
+                'location': 'foot_right',
+                'sensor_id': 6,
+                'quat_cols': ['R_FOOT_IMU_QuatW', 'R_FOOT_IMU_QuatX', 'R_FOOT_IMU_QuatY', 'R_FOOT_IMU_QuatZ'],
+                'acc_cols': ['R_FOOT_IMU_AccX', 'R_FOOT_IMU_AccY', 'R_FOOT_IMU_AccZ'],
+                'gyr_cols': ['R_FOOT_IMU_GyrX', 'R_FOOT_IMU_GyrY', 'R_FOOT_IMU_GyrZ']
+            }
+        ]
+        
+        # Parse each sensor
+        for config in sensor_configs:
+            # Check if all required columns exist
+            all_cols = config['quat_cols'] + config['acc_cols'] + config['gyr_cols']
+            if not all(col in df.columns for col in all_cols):
+                print(f"Warning: Skipping {config['location']} - missing columns")
+                continue
+            
+            # Extract data
+            quaternions = df[config['quat_cols']].values  # (N, 4) [w, x, y, z]
+            accelerations = df[config['acc_cols']].values  # (N, 3)
+            gyroscopes = df[config['gyr_cols']].values  # (N, 3)
+            
+            # Check for valid data (non-zero)
+            if np.all(quaternions == 0):
+                print(f"Warning: Skipping {config['location']} - all zero data")
+                continue
+            
+            # Create IMUSensorData
+            sensor_data = IMUSensorData(
+                sensor_id=config['sensor_id'],
+                location=config['location'],
+                timestamps=timestamps.copy(),
+                quaternions=quaternions,
+                accelerations=accelerations,
+                gyroscopes=gyroscopes,
+                sampling_frequency=sampling_freq
+            )
+            
+            data.add_imu_sensor_data(sensor_data)
+            print(f"  Loaded {config['location']}: {n_samples} samples")
+        
+        print(f"Successfully imported {len(data.imu_data)} sensors")
         return data
     
     @staticmethod
