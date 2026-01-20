@@ -131,8 +131,8 @@ def _detect_contact_single(
     """
     
     # Remove noise
-    foot_contact = _remove_noise(foot_contact, min_contact_duration)
-    # foot_contact = _remove_noise_advanced(foot_contact, min_contact_duration, min_contact_duration)
+    # foot_contact = _remove_noise(foot_contact, min_contact_duration)
+    foot_contact = _remove_noise_falsegapFirst(foot_contact, min_contact_duration)
     
     return foot_contact
 
@@ -231,107 +231,6 @@ def _remove_noise_falsegapFirst(contact: np.ndarray, min_duration: int) -> np.nd
 
     return cleaned
 
-def _remove_noise_advanced(contact: np.ndarray, min_true_duration: int, min_false_duration: int) -> np.ndarray:
-    """Run-length based denoising with directional gap fill
-
-    1) Flip True runs shorter than min_true_duration to False (remove short spikes).
-    2) Fill only False gaps shorter than min_false_duration that are bounded by True on both sides;
-       once a long False run is encountered, stop filling to preserve the real 1→0 transition.
-    """
-    contact = contact.astype(bool)
-    n = len(contact)
-    if n == 0:
-        return contact.copy()
-
-    # Run-length encode
-    values = []
-    lengths = []
-    prev = contact[0]
-    cnt = 1
-    for x in contact[1:]:
-        if x == prev:
-            cnt += 1
-        else:
-            values.append(prev)
-            lengths.append(cnt)
-            prev = x
-            cnt = 1
-    values.append(prev)
-    lengths.append(cnt)
-
-    # 1) Drop short True runs
-    for i, (v, l) in enumerate(zip(values, lengths)):
-        if v and l < min_true_duration:
-            values[i] = False
-
-    # 2) Fill short False gaps (bounded by True & length condition); stop after long False
-    in_tail_zero = False
-    for i, (v, l) in enumerate(zip(values, lengths)):
-        if not v:
-            left_true = (i - 1 >= 0 and values[i - 1])
-            right_true = (i + 1 < len(values) and values[i + 1])
-
-            if left_true and right_true and l < min_false_duration and not in_tail_zero:
-                values[i] = True  # fill short gap
-            else:
-                # if a long/terminal False starts, treat the rest as tail
-                in_tail_zero = True
-
-    # Decode back to array
-    out = np.empty(n, dtype=bool)
-    idx = 0
-    for v, l in zip(values, lengths):
-        out[idx:idx + l] = v
-        idx += l
-
-    return out
-
-def load_csv_data(filepath: str) -> Tuple[np.ndarray, dict, dict]:
-    """
-    Load IMU data from CSV file for both feet
-    
-    Supports format with columns like:
-    - L_FOOT_IMU_AccX, L_FOOT_IMU_AccY, L_FOOT_IMU_AccZ
-    - R_FOOT_IMU_AccX, R_FOOT_IMU_AccY, R_FOOT_IMU_AccZ
-    - L_FOOT_IMU_GyrX, L_FOOT_IMU_GyrY, L_FOOT_IMU_GyrZ
-    - R_FOOT_IMU_GyrX, R_FOOT_IMU_GyrY, R_FOOT_IMU_GyrZ
-    
-    Args:
-        filepath: Path to CSV file
-        
-    Returns:
-        timestamps: (N,) array
-        accelerations: dict with 'L_FOOT' and 'R_FOOT' keys, (N, 3) arrays
-        gyroscopes: dict with 'L_FOOT' and 'R_FOOT' keys, (N, 3) arrays
-    """
-    df = pd.read_csv(filepath)
-    
-    accelerations = {}
-    gyroscopes = {}
-    
-    # Load both feet
-    for foot in ['L_FOOT', 'R_FOOT']:
-        foot_accel_cols = [col for col in df.columns if f'{foot}_IMU_Acc' in col][:3]
-        foot_gyro_cols = [col for col in df.columns if f'{foot}_IMU_Gyr' in col][:3]
-        
-        if len(foot_accel_cols) == 3 and len(foot_gyro_cols) == 3:
-            print(f"✓ Found {foot} foot IMU data")
-            print(f"  Accel columns: {foot_accel_cols}")
-            print(f"  Gyro columns: {foot_gyro_cols}")
-            accelerations[foot] = df[foot_accel_cols].values
-            gyroscopes[foot] = df[foot_gyro_cols].values
-        else:
-            print(f"⚠ {foot} data not found in CSV")
-    
-    if not accelerations or not gyroscopes:
-        raise ValueError("No foot data found in CSV file")
-    
-    # Try to get timestamps
-    time_col = next((col for col in df.columns if 'time' in col.lower()), None)
-    timestamps = df[time_col].values if time_col else np.arange(len(df))
-    
-    return timestamps, accelerations, gyroscopes
-
 
 def compute_reference_values(
     accelerations: dict,
@@ -376,15 +275,15 @@ def compute_reference_values(
 
 def main():
     """Test with CSV file or sample data"""
-    csv_file = r"D:\Documents\KAIST\개별연구\IMU_MotionCapture\JJY_20260119_095340_walk_01_processed.csv"
+    csv_file = r"D:\Documents\KAIST\개별연구\IMU_MotionCapture\JJY_20260119_101145_stair_ascend_processed.csv"
     
     # Frame range for contact ratio calculation
-    calculation_frame_start = 3000
-    calculation_frame_end = 16800  # None for end of data
+    calculation_frame_start = 2000
+    calculation_frame_end = 14000  # None for end of data
     
     # Frame range for calibration (threshold calculation)
     calibration_frame_start = 0
-    calibration_frame_end = 2000  # None for end of data
+    calibration_frame_end = 1500  # None for end of data
 
     try:
         print(f"\nLoading: {csv_file}\n")
@@ -408,7 +307,7 @@ def main():
             foot_contact[foot] = _detect_contact_single(
                 accelerations[foot], gyroscopes[foot],
                 a_thr, accel_threshold_weight, gyro_threshold,
-                window_size=10, min_contact_duration=20
+                window_size=10, min_contact_duration=40
             )
         
         # Visualize
