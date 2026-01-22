@@ -75,10 +75,27 @@ class IMUSensorData:
 
 @dataclass
 class JointAngles:
-    """Joint angle data"""
+    """Joint angle data following ISB convention.
+    
+    Angles are computed using XYZ Cardan sequence and expressed in degrees.
+    
+    Column order for each joint array (N, 3):
+        - Column 0: Flexion/Extension (X-axis rotation)
+            - Hip: flexion(+) / extension(-)
+            - Knee: flexion(+) / extension(-)
+            - Ankle: dorsiflexion(+) / plantarflexion(-)
+        
+        - Column 1: Abduction/Adduction (Y-axis rotation)
+            - Hip: adduction(+) / abduction(-)
+            - Knee: varus(+) / valgus(-)
+            - Ankle: inversion(+) / eversion(-)
+        
+        - Column 2: Internal/External Rotation (Z-axis rotation)
+            - All joints: internal rotation(+) / external rotation(-)
+    """
     timestamps: np.ndarray  # (N,)
     
-    # Joint angles in degrees [flexion/extension, abduction/adduction, rotation]
+    # Joint angles in degrees [flexion, abduction, rotation]
     hip_right: np.ndarray  # (N, 3)
     hip_left: np.ndarray  # (N, 3)
     knee_right: np.ndarray  # (N, 3)
@@ -132,6 +149,7 @@ class MotionCaptureData:
     calibration_pose: Optional[str] = None
     calibration_duration: Optional[float] = None
     calibration_start_time: Optional[float] = None
+    heading_offset: Optional[np.ndarray] = None  # Trunk heading at N-pose for visualization
     
     # Processing status
     is_processed: bool = False

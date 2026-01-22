@@ -222,6 +222,7 @@ class Visualization3D(QWidget):
         # Define segments and their colors
         segments = {
             'trunk': (1.0, 1.0, 1.0, 1.0),      # White
+            'pelvis': (0.8, 0.8, 0.8, 1.0),     # Gray (connects left and right hip)
             'thigh_right': (1.0, 0.3, 0.3, 1.0),  # Red
             'thigh_left': (0.3, 0.3, 1.0, 1.0),   # Blue
             'shank_right': (1.0, 0.5, 0.5, 1.0),  # Light red
@@ -241,8 +242,8 @@ class Visualization3D(QWidget):
             self.view_widget.addItem(line_item)
             self.skeleton_items[segment_name] = line_item
         
-        # Create joint spheres
-        joint_names = ['hip', 'knee_right', 'knee_left', 'ankle_right', 'ankle_left', 'toe_right', 'toe_left']
+        # Create joint spheres (including rhip, lhip)
+        joint_names = ['hip', 'rhip', 'lhip', 'knee_right', 'knee_left', 'ankle_right', 'ankle_left', 'toe_right', 'toe_left']
         for joint_name in joint_names:
             mesh = gl.MeshData.sphere(rows=10, cols=10, radius=0.03)
             joint_item = gl.GLMeshItem(
@@ -329,26 +330,32 @@ class Visualization3D(QWidget):
         """
         Calculate 3D positions of all joints using forward kinematics.
         
-        Chain structure:
-            Hip (origin)
-            ├─ Right Thigh → Right Knee → Right Shank → Right Ankle → Right Foot → Right Toe
-            └─ Left Thigh → Left Knee → Left Shank → Left Ankle → Left Foot → Left Toe
+        Global coordinate system: X=forward, Y=left, Z=up
         
-        Returns:
-            Dictionary mapping joint names to (x, y, z) positions
+        IMU attachment directions (sensor local frame):
+        - trunk:       x-up, y-right, z-forward
+        - thigh/shank: x-up, y-left,  z-backward
+        - foot:        x-backward, y-left, z-down
+        
+        After N-pose calibration with qD=[1,0,0,0], the calibrated quaternion
+        represents the rotation FROM sensor's local frame TO global frame.
+        
+        So to get segment direction in global frame:
+        - trunk: local +X (up) → apply q_trunk
+        - thigh: local -X (down, since x-up and leg goes down) → apply q_thigh
+        - shank: local -X (down) → apply q_shank
+        - foot:  local -Z (forward, since z-down and foot points forward) → apply q_foot
         """
         positions = {}
         
-        # Hip position at origin (trunk base)
         hip_pos = np.array([0.0, 0.0, 1.0])
         positions['hip'] = hip_pos
         
-        # Get quaternions for this frame
         def get_quaternion(segment_name: str) -> np.ndarray:
             if segment_name in self.current_data.imu_data:
                 q = self.current_data.imu_data[segment_name].quaternions[frame_index]
-                return q / np.linalg.norm(q)  # Normalize
-            return np.array([1.0, 0.0, 0.0, 0.0])  # Identity if missing
+                return q / np.linalg.norm(q)
+            return np.array([1.0, 0.0, 0.0, 0.0])
         
         q_trunk = get_quaternion('trunk')
         q_thigh_r = get_quaternion('thigh_right')
@@ -358,66 +365,82 @@ class Visualization3D(QWidget):
         q_foot_r = get_quaternion('foot_right')
         q_foot_l = get_quaternion('foot_left')
         
-        # Helper function to rotate vector by quaternion
         def rotate_vector(v: np.ndarray, q: np.ndarray) -> np.ndarray:
-            """Rotate vector v by quaternion q [w,x,y,z]"""
-            # Convert to [x,y,z,w] for scipy convention if needed
-            # Or use manual computation: v' = q * v * q^{-1}
+            """Apply quaternion rotation to a vector."""
             w, x, y, z = q
-            
-            # Rotation matrix from quaternion
             R = np.array([
                 [1 - 2*(y*y + z*z),     2*(x*y - w*z),     2*(x*z + w*y)],
                 [    2*(x*y + w*z), 1 - 2*(x*x + z*z),     2*(y*z - w*x)],
                 [    2*(x*z - w*y),     2*(y*z + w*x), 1 - 2*(x*x + y*y)]
             ])
-            
             return R @ v
         
-        # Calculate hip positions (right/left) based on trunk rotation
-        # Hip offset from center: right = +0.15 along Y axis, left = -0.15 along Y axis
-        rhip_offset = np.array([0.0, 0.0, 0.15])  # Right hip offset in local frame
-        lhip_offset = np.array([0.0, 0.0, -0.15])  # Left hip offset in local frame
+        # ============================================================
+        # Segment direction vectors in IMU LOCAL coordinates
+        # These represent the segment's longitudinal axis in sensor frame
+        # ============================================================
         
-        # Rotate hip offsets by trunk quaternion to follow trunk orientation
-        rhip_pos = hip_pos + rotate_vector(rhip_offset, q_trunk)
-        lhip_pos = hip_pos + rotate_vector(lhip_offset, q_trunk)
+        # trunk: IMU x-axis points UP along trunk → local +X is segment direction
+        trunk_local_dir = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
+        
+        # thigh/shank: IMU x-axis points UP, but leg points DOWN → local -X is segment direction
+        thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
+        shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
+        
+        # foot: IMU z-axis points DOWN, foot points FORWARD → local -Z is segment direction
+        # (Actually, if IMU x=backward, z=down, then forward is -X)
+        foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
+        
+        # Hip offsets in trunk's local frame (y-right means -Y is left)
+        # trunk: y-right, so right hip offset is local -Y, left hip offset is local +Y
+        rhip_local_offset = np.array([0.0, -0.15, 0.0])
+        lhip_local_offset = np.array([0.0, 0.15, 0.0])
+        
+        # ============================================================
+        # Forward Kinematics: rotate local directions to global frame
+        # ============================================================
+        
+        # Trunk
+        trunk_dir = rotate_vector(trunk_local_dir, q_trunk)
+        trunk_top = hip_pos + trunk_dir
+        positions['trunk_top'] = trunk_top
+        
+        # Hip joints (offset from pelvis center using trunk orientation)
+        rhip_offset = rotate_vector(rhip_local_offset, q_trunk)
+        lhip_offset = rotate_vector(lhip_local_offset, q_trunk)
+        rhip_pos = hip_pos + rhip_offset
+        lhip_pos = hip_pos + lhip_offset
         positions['rhip'] = rhip_pos
         positions['lhip'] = lhip_pos
         
-        # Trunk top position (trunk extends upward from hip)
-        trunk_vector = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
-        trunk_top = hip_pos + rotate_vector(trunk_vector, q_trunk)
-        positions['trunk_top'] = trunk_top
-        
         # Right leg chain
-        thigh_r_vector = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])  # Points down
-        knee_r_pos = rhip_pos + rotate_vector(thigh_r_vector, q_thigh_r)
+        thigh_r_dir = rotate_vector(thigh_local_dir, q_thigh_r)
+        knee_r_pos = rhip_pos + thigh_r_dir
         positions['knee_right'] = knee_r_pos
         
-        shank_r_vector = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
-        ankle_r_pos = knee_r_pos + rotate_vector(shank_r_vector, q_shank_r)
+        shank_r_dir = rotate_vector(shank_local_dir, q_shank_r)
+        ankle_r_pos = knee_r_pos + shank_r_dir
         positions['ankle_right'] = ankle_r_pos
         
-        foot_r_vector = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])  # Points forward
-        toe_r_pos = ankle_r_pos + rotate_vector(foot_r_vector, q_foot_r)
+        foot_r_dir = rotate_vector(foot_local_dir, q_foot_r)
+        toe_r_pos = ankle_r_pos + foot_r_dir
         positions['toe_right'] = toe_r_pos
         
         # Left leg chain
-        thigh_l_vector = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
-        knee_l_pos = lhip_pos + rotate_vector(thigh_l_vector, q_thigh_l)
+        thigh_l_dir = rotate_vector(thigh_local_dir, q_thigh_l)
+        knee_l_pos = lhip_pos + thigh_l_dir
         positions['knee_left'] = knee_l_pos
         
-        shank_l_vector = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
-        ankle_l_pos = knee_l_pos + rotate_vector(shank_l_vector, q_shank_l)
+        shank_l_dir = rotate_vector(shank_local_dir, q_shank_l)
+        ankle_l_pos = knee_l_pos + shank_l_dir
         positions['ankle_left'] = ankle_l_pos
         
-        foot_l_vector = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
-        toe_l_pos = ankle_l_pos + rotate_vector(foot_l_vector, q_foot_l)
+        foot_l_dir = rotate_vector(foot_local_dir, q_foot_l)
+        toe_l_pos = ankle_l_pos + foot_l_dir
         positions['toe_left'] = toe_l_pos
         
         return positions
-    
+        
     def _update_skeleton(self, positions: dict):
         """Update skeleton graphics with new joint positions"""
         if not PYQTGRAPH_AVAILABLE:
@@ -426,6 +449,7 @@ class Visualization3D(QWidget):
         # Update segment lines
         segments_to_draw = [
             ('trunk', positions['hip'], positions['trunk_top']),
+            ('pelvis', positions['lhip'], positions['rhip']),  # Pelvis connects left and right hip
             ('thigh_right', positions['rhip'], positions['knee_right']),
             ('thigh_left', positions['lhip'], positions['knee_left']),
             ('shank_right', positions['knee_right'], positions['ankle_right']),
@@ -449,18 +473,16 @@ class Visualization3D(QWidget):
         self._update_segment_axes(positions)
     
     def _update_segment_axes(self, positions: dict):
-        """Update coordinate axes for each segment based on their orientations"""
+        """Update coordinate axes for each segment based on their orientations."""
         if not PYQTGRAPH_AVAILABLE or not self.current_data:
             return
         
-        # Get quaternions for current frame
         def get_quaternion(segment_name: str) -> np.ndarray:
             if segment_name in self.current_data.imu_data:
                 q = self.current_data.imu_data[segment_name].quaternions[self.current_frame]
                 return q / np.linalg.norm(q)
             return np.array([1.0, 0.0, 0.0, 0.0])
         
-        # Helper to rotate vector by quaternion
         def rotate_vector(v: np.ndarray, q: np.ndarray) -> np.ndarray:
             w, x, y, z = q
             R = np.array([
@@ -470,8 +492,10 @@ class Visualization3D(QWidget):
             ])
             return R @ v
         
-        # Axis length
         axis_length = 0.1
+        axis_x_npose = np.array([axis_length, 0, 0])
+        axis_y_npose = np.array([0, axis_length, 0])
+        axis_z_npose = np.array([0, 0, axis_length])
         
         # Define segment center positions and their quaternions
         segment_configs = [
@@ -490,15 +514,11 @@ class Visualization3D(QWidget):
             
             q = get_quaternion(segment_name)
             
-            # Define local axes (desired orientation frame)
-            local_x = np.array([axis_length, 0, 0])
-            local_y = np.array([0, axis_length, 0])
-            local_z = np.array([0, 0, axis_length])
-            
-            # Rotate to global frame
-            global_x = rotate_vector(local_x, q)
-            global_y = rotate_vector(local_y, q)
-            global_z = rotate_vector(local_z, q)
+            # Rotate N-pose axes by segment's quaternion
+            # This shows where the segment's local axes point in global space
+            global_x = rotate_vector(axis_x_npose, q)
+            global_y = rotate_vector(axis_y_npose, q)
+            global_z = rotate_vector(axis_z_npose, q)
             
             # Update axis line items
             x_axis, y_axis, z_axis = self.axis_items[segment_name]
@@ -555,21 +575,7 @@ class Visualization3D(QWidget):
         self.stop_btn.setEnabled(False)
     
     def _advance_frame(self):
-        """
-        Advance to next frame during playback.
-        
-        Uses time-based frame calculation to ensure accurate playback speed:
-        - Display refresh: 50 Hz (every 20ms)
-        - Frame selection based on elapsed real-time
-        - playback_speed controls time acceleration
-        
-        Example (500Hz data, 1x speed):
-        - 0.02s elapsed (1 tick) → frame 10
-        - 0.04s elapsed (2 ticks) → frame 20
-        - 0.06s elapsed (3 ticks) → frame 30
-        - 1.00s elapsed (50 ticks) → frame 500
-        - Display shows frames: 0, 10, 20, 30, 40, 50... (skipping to match real-time)
-        """
+        """Advance to next frame during playback using time-based frame calculation."""
         if not self.current_data or not self.current_data.imu_data:
             return
         

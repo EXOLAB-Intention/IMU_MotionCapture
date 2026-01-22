@@ -1,6 +1,12 @@
 """
 Calibration processor for IMU motion capture
-Handles initial pose calibration (T-pose, N-pose) to establish reference frames
+Handles initial pose calibration (N-pose) to establish reference frames
+
+MATLAB Pipeline Implementation:
+1. At calibration pose, get raw quaternion: q_raw(T_pose)
+2. Find desired axis-aligned orientation: qD = plotQuatNearestAxes(q_raw)
+3. Compute correction: qCorr = qD * q_raw^{-1} (quatmultiply(qD, quatinv(q_raw)))
+4. Apply to all frames: q_calibrated = qCorr * q_raw (LEFT multiplication)
 """
 import numpy as np
 import json
@@ -13,115 +19,164 @@ from core.kinematics import KinematicsProcessor
 
 
 class CalibrationProcessor:
-    """Processes calibration poses to establish reference orientations"""
+    """
+    Processes calibration poses to establish reference orientations
+    
+    Pipeline:
+        1. q_desired = ideal IMU orientation for each segment (from attachment spec)
+        2. q_calib = average of measured quaternions during N-pose
+        3. q_offset = conj(q_calib) * q_desired (RIGHT multiplication)
+        4. q_segment = q_measured * q_offset (RIGHT multiplication)
+    """
     
     CALIBRATION_EXTENSION = '.cal'
     
+    # =======================================================================
+    # Desired IMU orientations for each segment at N-pose (차렷자세)
+    # Ground coordinate: X=forward, Y=left, Z=up
+    # =======================================================================
     @staticmethod
-    def _rotation_matrix_to_quaternion(R: np.ndarray) -> np.ndarray:
+    def _get_desired_quaternions() -> Dict[str, np.ndarray]:
         """
-        Convert rotation matrix to quaternion [w, x, y, z].
+        Get desired (ideal) IMU orientations as quaternions.
         
-        Args:
-            R: 3x3 rotation matrix
-            
-        Returns:
-            Quaternion [w, x, y, z]
+        IMU attachment directions at N-pose:
+        - trunk:       x-up, y-right, z-forward
+        - thigh/shank: x-up, y-left,  z-backward
+        - foot:        x-backward, y-left, z-down
+        
+        Rotation matrix R: R @ v_local = v_global
+        Each column of R is where the sensor's local axis points in global frame.
         """
-        trace = np.trace(R)
+        def rotmat_to_quat(R: np.ndarray) -> np.ndarray:
+            """Convert rotation matrix to quaternion [w, x, y, z]."""
+            trace = np.trace(R)
+            if trace > 0:
+                s = 0.5 / np.sqrt(trace + 1.0)
+                w = 0.25 / s
+                x = (R[2, 1] - R[1, 2]) * s
+                y = (R[0, 2] - R[2, 0]) * s
+                z = (R[1, 0] - R[0, 1]) * s
+            elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+                s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+                w = (R[2, 1] - R[1, 2]) / s
+                x = 0.25 * s
+                y = (R[0, 1] + R[1, 0]) / s
+                z = (R[0, 2] + R[2, 0]) / s
+            elif R[1, 1] > R[2, 2]:
+                s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+                w = (R[0, 2] - R[2, 0]) / s
+                x = (R[0, 1] + R[1, 0]) / s
+                y = 0.25 * s
+                z = (R[1, 2] + R[2, 1]) / s
+            else:
+                s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+                w = (R[1, 0] - R[0, 1]) / s
+                x = (R[0, 2] + R[2, 0]) / s
+                y = (R[1, 2] + R[2, 1]) / s
+                z = 0.25 * s
+            q = np.array([w, x, y, z])
+            return q / np.linalg.norm(q)
         
-        if trace > 0:
-            s = 0.5 / np.sqrt(trace + 1.0)
-            w = 0.25 / s
-            x = (R[2, 1] - R[1, 2]) * s
-            y = (R[0, 2] - R[2, 0]) * s
-            z = (R[1, 0] - R[0, 1]) * s
-        elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-            s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-            w = (R[2, 1] - R[1, 2]) / s
-            x = 0.25 * s
-            y = (R[0, 1] + R[1, 0]) / s
-            z = (R[0, 2] + R[2, 0]) / s
-        elif R[1, 1] > R[2, 2]:
-            s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-            w = (R[0, 2] - R[2, 0]) / s
-            x = (R[0, 1] + R[1, 0]) / s
-            y = 0.25 * s
-            z = (R[1, 2] + R[2, 1]) / s
-        else:
-            s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-            w = (R[1, 0] - R[0, 1]) / s
-            x = (R[0, 2] + R[2, 0]) / s
-            y = (R[1, 2] + R[2, 1]) / s
-            z = 0.25 * s
-        
-        quat = np.array([w, x, y, z])
-        return quat / np.linalg.norm(quat)
-    
-    @staticmethod
-    def _get_desired_orientations() -> Dict[str, np.ndarray]:
-        """
-        Get desired orientations for each segment in N-pose.
-        
-        Global coordinate frame (ground/lab frame):
-            X: forward (사람의 앞)
-            Y: left (사람의 왼쪽)
-            Z: up (사람의 위)
-        
-        Segment local frames in N-pose:
-            Trunk: local_x=골반→머리(up), local_y=앞(forward), local_z=왼쪽(left)
-            Thigh/Shank: local_x=proximal→distal(down), local_y=뒤(back), local_z=오른쪽(right)
-            Foot: local_x=proximal→distal(forward), local_y=발바닥(down), local_z=오른쪽(right)
-        
-        Returns:
-            Dictionary mapping segment names to desired quaternions [w,x,y,z]
-        """
+        # trunk: x-up, y-right, z-forward
+        # sensor x → global [0, 0, 1] (up)
+        # sensor y → global [0, -1, 0] (right = -left)
+        # sensor z → global [1, 0, 0] (forward)
         R_trunk = np.array([
-            [0, 1, 0],   # global X = local Y
-            [0, 0, 1],   # global Y = local Z
-            [1, 0, 0]    # global Z = local X
-        ])
+            [0, 0, 1],    # column 0: sensor x in global
+            [0, -1, 0],   # column 1: sensor y in global
+            [1, 0, 0]     # column 2: sensor z in global
+        ]).T  # transpose to get columns right
         
-        R_thigh_right = np.array([
-            [0, -1, 0],   # global X = -local Y (back)
-            [0, 0, -1],   # global Y = -local Z (right)
-            [1,  0, 0]    # global Z =  local X (up)
-        ])
+        # thigh/shank: x-up, y-left, z-backward
+        # sensor x → global [0, 0, 1] (up)
+        # sensor y → global [0, 1, 0] (left)
+        # sensor z → global [-1, 0, 0] (backward)
+        R_thigh = np.array([
+            [0, 0, 1],
+            [0, 1, 0],
+            [-1, 0, 0]
+        ]).T
         
-        R_thigh_left = np.array([
-            [0, -1, 0],   # global X = -local Y (back)
-            [0, 0, -1],   # global Y = -local Z (right)
-            [1,  0, 0]    # global Z =  local X (up)
-        ])
+        # foot: x-backward, y-left, z-down
+        # sensor x → global [-1, 0, 0] (backward)
+        # sensor y → global [0, 1, 0] (left)
+        # sensor z → global [0, 0, -1] (down)
+        R_foot = np.array([
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, 0, -1]
+        ]).T
         
-        R_foot_right = np.array([
-            [-1, 0, 0],   # global X = -local X (forward)
-            [0, 0, -1],   # global Y = -local Z (right)
-            [0, -1, 0]    # global Z = -local Y (발바닥은 아래)
-        ])
-        
-        R_foot_left = np.array([
-            [-1, 0, 0],   # global X = -local X (forward)
-            [0, 0, -1],   # global Y = -local Z (right)
-            [0, -1, 0]    # global Z = -local Y (발바닥은 아래)
-        ])
+        q_trunk = rotmat_to_quat(R_trunk)
+        q_thigh = rotmat_to_quat(R_thigh)
+        q_foot = rotmat_to_quat(R_foot)
         
         return {
-            'trunk': CalibrationProcessor._rotation_matrix_to_quaternion(R_trunk),
-            'thigh_right': CalibrationProcessor._rotation_matrix_to_quaternion(R_thigh_right),
-            'thigh_left': CalibrationProcessor._rotation_matrix_to_quaternion(R_thigh_left),
-            'shank_right': CalibrationProcessor._rotation_matrix_to_quaternion(R_thigh_right),  # Same as thigh
-            'shank_left': CalibrationProcessor._rotation_matrix_to_quaternion(R_thigh_left),    # Same as thigh
-            'foot_right': CalibrationProcessor._rotation_matrix_to_quaternion(R_foot_right),
-            'foot_left': CalibrationProcessor._rotation_matrix_to_quaternion(R_foot_left),
+            'trunk': q_trunk,
+            'thigh_right': q_thigh.copy(),
+            'thigh_left': q_thigh.copy(),
+            'shank_right': q_thigh.copy(),
+            'shank_left': q_thigh.copy(),
+            'foot_right': q_foot.copy(),
+            'foot_left': q_foot.copy(),
         }
     
     def __init__(self):
-        self.correction_quaternions: Dict[str, np.ndarray] = {}  # qCorr for each segment
+        self.offset_quaternions: Dict[str, np.ndarray] = {}    # q_offset for each segment
+        self.desired_quaternions: Dict[str, np.ndarray] = {}   # q_desired (ideal orientation)
+        self.calib_quaternions: Dict[str, np.ndarray] = {}     # q_calib (average at N-pose)
+        self.heading_offset: Optional[np.ndarray] = None
         self.is_calibrated = False
         self.pose_type: Optional[str] = None
         self.calibration_time: Optional[datetime] = None
         self.subject_id: Optional[str] = None
+    
+    @staticmethod
+    def _extract_heading_quaternion(q: np.ndarray) -> np.ndarray:
+        """Extract only the heading (yaw/Z-rotation) component from a quaternion."""
+        w, x, y, z = q
+        
+        R = KinematicsProcessor.quaternion_to_rotation_matrix(q)
+        
+        local_forward = np.array([1.0, 0.0, 0.0])
+        global_forward = R @ local_forward
+        yaw = np.arctan2(global_forward[1], global_forward[0])
+        
+        q_heading = np.array([
+            np.cos(yaw / 2),
+            0.0,
+            0.0,
+            np.sin(yaw / 2)
+        ])
+        
+        return q_heading
+    
+    @staticmethod
+    def _average_quaternions(quaternions: np.ndarray) -> np.ndarray:
+        """
+        Average multiple quaternions using eigenvalue method.
+        
+        Args:
+            quaternions: (N, 4) array of quaternions [w, x, y, z]
+            
+        Returns:
+            Average quaternion [w, x, y, z]
+        """
+        if len(quaternions) == 0:
+            raise ValueError("No quaternions provided for averaging")
+        
+        # Ensure consistent hemisphere (all quaternions pointing same direction)
+        q0 = quaternions[0]
+        for i in range(1, len(quaternions)):
+            if np.dot(quaternions[i], q0) < 0:
+                quaternions[i] = -quaternions[i]
+        
+        # Eigenvalue method for averaging
+        M = np.dot(quaternions.T, quaternions)
+        eigenvalues, eigenvectors = np.linalg.eigh(M)
+        avg_quat = eigenvectors[:, np.argmax(eigenvalues)]
+        return avg_quat / np.linalg.norm(avg_quat)
     
     def calibrate(
         self, 
@@ -131,68 +186,62 @@ class CalibrationProcessor:
         pose_type: str = "N-pose"
     ):
         """
-        Perform N-pose calibration following MATLAB workflow.
+        Perform N-pose calibration.
         
-        Computes correction quaternions to align IMU measurements with desired orientations.
-        
-        Algorithm (from MATLAB):
-            1. Extract first frame (or average) during calibration period
-            2. For each segment:
-                qD = desired orientation (identity for N-pose)
-                qRaw = measured raw quaternion at calibration frame
-                qCorr = qD * qRaw^{-1}  (correction quaternion)
-            3. Save qCorr for each segment
-        
-        Later, during motion trial processing:
-            q_corrected = qCorr * qRaw
-        
-        This ensures that N-pose orientation becomes identity ("standing straight").
-        
-        Args:
-            data: Motion capture data containing calibration period
-            start_time: Start of calibration pose (seconds)
-            end_time: End of calibration pose (seconds)
-            pose_type: Type of calibration pose (only "N-pose" supported)
+        Algorithm:
+            1. q_desired = ideal IMU orientation for each segment
+            2. q_calib = average of measured quaternions during N-pose
+            3. q_offset = conj(q_calib) * q_desired (RIGHT multiplication)
+            4. Apply: q_segment = q_measured * q_offset (RIGHT multiplication)
         """
         print(f"Calibrating with {pose_type} from {start_time:.2f}s to {end_time:.2f}s")
+        print("Pipeline: q_offset = conj(q_calib) * q_desired, q_segment = q_measured * q_offset")
         
-        if pose_type != "N-pose":
-            print(f"Warning: Only N-pose is currently supported. Using N-pose calibration.")
-            pose_type = "N-pose"
+        # Get desired quaternions for each segment
+        desired_quats = self._get_desired_quaternions()
         
-        # Extract calibration data for each sensor
         for location, sensor_data in data.imu_data.items():
-            # Get time slice
             mask = (sensor_data.timestamps >= start_time) & (sensor_data.timestamps <= end_time)
             
             if not mask.any():
                 raise ValueError(f"No data found in calibration period for {location}")
             
-            # Get first frame quaternion (MATLAB uses stand_pose_time)
-            calib_indices = np.where(mask)[0]
-            first_frame_idx = calib_indices[0]
-            q_raw = sensor_data.quaternions[first_frame_idx]
+            # Get all quaternions in calibration window
+            calib_quats = sensor_data.quaternions[mask]
             
-            # Normalize raw quaternion
-            q_raw_norm = q_raw / np.linalg.norm(q_raw)
+            # Normalize each quaternion
+            norms = np.linalg.norm(calib_quats, axis=1, keepdims=True)
+            calib_quats_norm = calib_quats / norms
             
-            # Get desired orientation for this segment
-            desired_orientations = self._get_desired_orientations()
-            if location in desired_orientations:
-                q_desired = desired_orientations[location]
+            # Average quaternions to get q_calib
+            q_calib = self._average_quaternions(calib_quats_norm)
+            self.calib_quaternions[location] = q_calib.copy()
+            
+            # Get q_desired for this segment
+            if location in desired_quats:
+                q_desired = desired_quats[location]
             else:
-                # Default to identity if not defined
-                q_desired = np.array([1.0, 0.0, 0.0, 0.0])
-                print(f"  Warning: No desired orientation defined for {location}, using identity")
+                q_desired = np.array([1.0, 0.0, 0.0, 0.0])  # identity as fallback
+            self.desired_quaternions[location] = q_desired.copy()
             
-            # Compute correction quaternion: qCorr = qD * qRaw^{-1}
-            # This is the transformation that takes qRaw to qD
-            q_raw_inv = KinematicsProcessor.quaternion_inverse(q_raw_norm)
-            q_corr = KinematicsProcessor.quaternion_multiply(q_desired, q_raw_inv)
+            # Compute q_offset = conj(q_calib) * q_desired (RIGHT multiplication)
+            q_calib_conj = KinematicsProcessor.quaternion_conjugate(q_calib)
+            q_offset = KinematicsProcessor.quaternion_multiply(q_calib_conj, q_desired)
+            q_offset = q_offset / np.linalg.norm(q_offset)
+            self.offset_quaternions[location] = q_offset
             
-            self.correction_quaternions[location] = q_corr
-            
-            print(f"  {location}: correction quaternion = [{q_corr[0]:.4f}, {q_corr[1]:.4f}, {q_corr[2]:.4f}, {q_corr[3]:.4f}]")
+            print(f"  {location}:")
+            print(f"    q_calib   = [{q_calib[0]:.4f}, {q_calib[1]:.4f}, {q_calib[2]:.4f}, {q_calib[3]:.4f}]")
+            print(f"    q_desired = [{q_desired[0]:.4f}, {q_desired[1]:.4f}, {q_desired[2]:.4f}, {q_desired[3]:.4f}]")
+            print(f"    q_offset  = [{q_offset[0]:.4f}, {q_offset[1]:.4f}, {q_offset[2]:.4f}, {q_offset[3]:.4f}]")
+        
+        # Extract heading offset from trunk
+        if 'trunk' in self.calib_quaternions:
+            q_trunk = self.calib_quaternions['trunk']
+            q_heading = self._extract_heading_quaternion(q_trunk)
+            self.heading_offset = q_heading.copy()
+            heading_angle = 2 * np.arctan2(q_heading[3], q_heading[0]) * 180 / np.pi
+            print(f"  Trunk heading: {heading_angle:.1f}° from global X")
         
         self.is_calibrated = True
         self.pose_type = pose_type
@@ -203,16 +252,7 @@ class CalibrationProcessor:
         print("N-pose calibration complete!")
     
     def _average_quaternions(self, quaternions: np.ndarray) -> np.ndarray:
-        """
-        Average multiple quaternions
-        
-        Args:
-            quaternions: (N, 4) array of quaternions [w, x, y, z]
-            
-        Returns:
-            (4,) averaged quaternion
-        """
-        # Placeholder: simple mean and normalize
+        """Average multiple quaternions using eigenvalue method."""
         if len(quaternions) == 0:
             raise ValueError("No quaternions provided for averaging")
         M = np.dot(quaternions.T, quaternions)
@@ -220,37 +260,28 @@ class CalibrationProcessor:
         avg_quat = eigenvectors[:, np.argmax(eigenvalues)]
         return avg_quat / np.linalg.norm(avg_quat)
     
-    def get_correction_quaternion(self, location: str) -> Optional[np.ndarray]:
-        """Get correction quaternion for a sensor location"""
-        return self.correction_quaternions.get(location)
+    def get_offset_quaternion(self, location: str) -> Optional[np.ndarray]:
+        """Get offset quaternion for a sensor location"""
+        return self.offset_quaternions.get(location)
+    
+    def get_desired_quaternion(self, location: str) -> Optional[np.ndarray]:
+        """Get desired quaternion for a sensor location"""
+        return self.desired_quaternions.get(location)
     
     def apply_calibration(self, quaternion: np.ndarray, location: str) -> np.ndarray:
         """
-        Apply calibration to transform quaternion to calibrated frame.
+        Apply calibration using RIGHT multiplication.
         
-        Following MATLAB approach:
-            q_corrected = qCorr * qRaw
-        
-        This applies the correction transformation computed during calibration.
-        
-        Args:
-            quaternion: Current raw orientation quaternion [w, x, y, z]
-            location: Sensor location
-            
-        Returns:
-            Calibrated quaternion (aligned to desired N-pose orientation)
+        q_segment = q_measured * q_offset
         """
-        if not self.is_calibrated or location not in self.correction_quaternions:
+        if not self.is_calibrated or location not in self.offset_quaternions:
             return quaternion
         
-        q_corr = self.correction_quaternions[location]
-        # Apply correction: q_calibrated = qCorr * qRaw (MATLAB: quatmultiply(qCorr, qRaw))
-        q_calibrated = KinematicsProcessor.quaternion_multiply(q_corr, quaternion)
-        
-        # Normalize result
-        q_calibrated = q_calibrated / np.linalg.norm(q_calibrated)
+        q_offset = self.offset_quaternions[location]
+        q_segment = KinematicsProcessor.quaternion_multiply(quaternion, q_offset)
+        q_segment = q_segment / np.linalg.norm(q_segment)
 
-        return q_calibrated
+        return q_segment
 
     def validate_calibration_pose(
         self, 
@@ -298,16 +329,25 @@ class CalibrationProcessor:
         
         # Prepare calibration data
         calib_data = {
-            'version': '2.0',  # Updated version for new calibration method
+            'version': '4.0',  # Version 4.0: q_segment = q_measured * q_offset (RIGHT multiplication)
             'pose_type': self.pose_type,
             'calibration_time': self.calibration_time.isoformat() if self.calibration_time else None,
             'subject_id': self.subject_id,
-            'correction_quaternions': {}
+            'heading_offset': self.heading_offset.tolist() if self.heading_offset is not None else None,
+            'offset_quaternions': {},
+            'desired_quaternions': {},
+            'calib_quaternions': {}
         }
         
         # Convert numpy arrays to lists for JSON serialization
-        for location, quat in self.correction_quaternions.items():
-            calib_data['correction_quaternions'][location] = quat.tolist()
+        for location, quat in self.offset_quaternions.items():
+            calib_data['offset_quaternions'][location] = quat.tolist()
+        
+        for location, quat in self.desired_quaternions.items():
+            calib_data['desired_quaternions'][location] = quat.tolist()
+        
+        for location, quat in self.calib_quaternions.items():
+            calib_data['calib_quaternions'][location] = quat.tolist()
         
         # Save to file
         with open(filepath, 'w') as f:
@@ -326,20 +366,37 @@ class CalibrationProcessor:
             calib_data = json.load(f)
         
         version = calib_data.get('version', '1.0')
+        print(f"Loading calibration file version {version}")
         
-        # Load correction quaternions (support both old and new format)
-        self.correction_quaternions = {}
-        if 'correction_quaternions' in calib_data:
-            # New format (v2.0)
+        # Load offset quaternions (v4.0+)
+        self.offset_quaternions = {}
+        if 'offset_quaternions' in calib_data:
+            for location, quat_list in calib_data['offset_quaternions'].items():
+                self.offset_quaternions[location] = np.array(quat_list)
+        elif 'correction_quaternions' in calib_data:
+            # Backward compatibility with older versions
+            print("  Warning: Loading old format. Converting correction to offset.")
             for location, quat_list in calib_data['correction_quaternions'].items():
-                self.correction_quaternions[location] = np.array(quat_list)
-        elif 'reference_orientations' in calib_data:
-            # Old format (v1.0) - convert to correction quaternions
-            print("  Warning: Loading old calibration format (v1.0). This may not work correctly with new N-pose method.")
-            for location, quat_list in calib_data['reference_orientations'].items():
-                # Old format stored reference, need to compute correction
-                # For backward compatibility, use identity as correction
-                self.correction_quaternions[location] = np.array([1.0, 0.0, 0.0, 0.0])
+                self.offset_quaternions[location] = np.array(quat_list)
+        
+        # Load desired quaternions
+        self.desired_quaternions = {}
+        if 'desired_quaternions' in calib_data:
+            for location, quat_list in calib_data['desired_quaternions'].items():
+                self.desired_quaternions[location] = np.array(quat_list)
+        
+        # Load calib quaternions (v4.0+)
+        self.calib_quaternions = {}
+        if 'calib_quaternions' in calib_data:
+            for location, quat_list in calib_data['calib_quaternions'].items():
+                self.calib_quaternions[location] = np.array(quat_list)
+        
+        # Load heading offset
+        self.heading_offset = None
+        if 'heading_offset' in calib_data and calib_data['heading_offset'] is not None:
+            self.heading_offset = np.array(calib_data['heading_offset'])
+            heading_angle = 2 * np.arctan2(self.heading_offset[3], self.heading_offset[0]) * 180 / np.pi
+            print(f"  Heading offset: {-heading_angle:.1f}°")
         
         self.pose_type = calib_data.get('pose_type')
         self.subject_id = calib_data.get('subject_id')
@@ -351,76 +408,48 @@ class CalibrationProcessor:
         print(f"Calibration loaded from: {filepath}")
         print(f"  Version: {version}")
         print(f"  Pose type: {self.pose_type}")
-        print(f"  Sensors: {list(self.correction_quaternions.keys())}")
+        print(f"  Sensors: {list(self.offset_quaternions.keys())}")
     
     def apply_to_data(self, data: MotionCaptureData) -> MotionCaptureData:
         """
         Apply calibration to motion capture data.
         
-        Uses incremental rotation approach:
-            q_segment(t) = [q_imu(t) * q_imu(1)^{-1}] * qCorr * q_imu(1)
-        
-        Steps:
-            1. Compute relative rotation from first frame: q_rel(t) = q_imu(t) * q_imu(1)^{-1}
-            2. Apply correction: q_temp = q_rel * qCorr
-            3. Transform back to original frame: q_segment(t) = q_temp * q_imu(1)
-        
-        This ensures consistent reference frame across trials while preserving initial orientation.
-        
-        Args:
-            data: Motion capture data to calibrate
-            
-        Returns:
-            Calibrated motion capture data
+        q_segment = q_measured * q_offset (RIGHT multiplication)
         """
         if not self.is_calibrated:
             raise ValueError("No calibration loaded. Load calibration first.")
         
         print(f"Applying N-pose calibration to data: {data.session_id}")
+        print("  Pipeline: q_segment = q_measured * q_offset (RIGHT multiplication)")
         
-        # Create calibrated copy
         from copy import deepcopy
         calibrated_data = deepcopy(data)
         
-        # Apply calibration to each sensor
+        if self.heading_offset is not None:
+            calibrated_data.heading_offset = self.heading_offset.copy()
+        
         for location, sensor_data in calibrated_data.imu_data.items():
-            if location not in self.correction_quaternions:
-                print(f"  Warning: No correction quaternion for {location}, skipping")
+            if location not in self.offset_quaternions:
+                print(f"  Warning: No offset quaternion for {location}, skipping")
                 continue
             
             n_samples = len(sensor_data.quaternions)
             if n_samples == 0:
                 continue
             
-            # Get first frame quaternion (reference)
-            q_first = sensor_data.quaternions[0]
-            q_first_norm = q_first / np.linalg.norm(q_first)
-            q_first_inv = KinematicsProcessor.quaternion_inverse(q_first_norm)
+            q_offset = self.offset_quaternions[location]
             
-            # Get correction quaternion
-            q_corr = self.correction_quaternions[location]
+            # Normalize all raw quaternions first
+            q_measured = sensor_data.quaternions
+            q_measured_norm = KinematicsProcessor.quaternion_normalize(q_measured)
             
-            # Apply to all frames: q_segment(t) = [q_imu(t) * q_imu(1)^{-1}] * qCorr * q_imu(1)
-            for i in range(n_samples):
-                q_imu = sensor_data.quaternions[i]
-                q_imu_norm = q_imu / np.linalg.norm(q_imu)
-                
-                # Step 1: Compute relative rotation from first frame
-                q_rel = KinematicsProcessor.quaternion_multiply(q_imu_norm, q_first_inv)
-                
-                # Step 2: Apply correction
-                q_temp = KinematicsProcessor.quaternion_multiply(q_rel, q_corr)
-                
-                # Step 3: Transform back to original frame
-                q_segment = KinematicsProcessor.quaternion_multiply(q_temp, q_first_norm)
-                
-                # Normalize and store
-                sensor_data.quaternions[i] = q_segment / np.linalg.norm(q_segment)
+            # Apply offset: q_segment = q_measured * q_offset (RIGHT multiplication)
+            q_segment = KinematicsProcessor.quaternion_multiply(q_measured_norm, q_offset)
+            q_segment = KinematicsProcessor.quaternion_normalize(q_segment)
             
+            sensor_data.quaternions = q_segment
             print(f"  Calibrated {location}: {n_samples} samples")
         
-        # Mark as calibrated
         calibrated_data.calibration_pose = self.pose_type
-        
         print("N-pose calibration applied successfully!")
         return calibrated_data
