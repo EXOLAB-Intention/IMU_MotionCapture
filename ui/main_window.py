@@ -300,7 +300,7 @@ class MainWindow(QMainWindow):
         """Update calibration status indicator in status bar"""
         if self.data_processor.calibration_processor.is_calibrated:
             pose_type = self.data_processor.calibration_processor.pose_type or "Unknown"
-            n_sensors = len(self.data_processor.calibration_processor.reference_orientations)
+            n_sensors = len(self.data_processor.calibration_processor.offset_quaternions)
             self.calib_indicator.setText(f"🟢 {pose_type} Calibration ({n_sensors} sensors)")
             self.calib_indicator.setStyleSheet("color: #4CAF50; font-weight: bold;")
         else:
@@ -343,7 +343,7 @@ class MainWindow(QMainWindow):
                 "Calibration Loaded",
                 f"Calibration loaded successfully!\n"
                 f"Pose type: {self.data_processor.calibration_processor.pose_type}\n"
-                f"Sensors: {len(self.data_processor.calibration_processor.reference_orientations)}"
+                f"Sensors: {len(self.data_processor.calibration_processor.offset_quaternions)}"
             )
         
         except Exception as e:
@@ -379,7 +379,7 @@ class MainWindow(QMainWindow):
     
     @pyqtSlot()
     def perform_calibration(self):
-        """Perform calibration on current data (use entire duration)"""
+        """Perform calibration on current data using selected time range or first 0.5s"""
         if not self.current_data:
             QMessageBox.warning(
                 self,
@@ -390,14 +390,30 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            # Use entire time range for calibration
-            start_time, end_time = self.current_data.get_time_range()
+            # Get selected time range from time bar
+            selected_start, selected_end = self.main_view.get_selected_time_range()
+            full_start, full_end = self.current_data.get_time_range()
+            
+            # Determine calibration time range
+            # If user selected a specific range (not full range), use that
+            # Otherwise, use first 0.5 seconds (or first frame if file is shorter)
+            if abs(selected_start - full_start) > 0.01 or abs(selected_end - full_end) > 0.01:
+                # User selected a specific range
+                start_time = selected_start
+                end_time = selected_end
+                range_source = "user selection"
+            else:
+                # Use first 0.5 seconds for calibration (assuming standing pose at start)
+                start_time = full_start
+                end_time = min(full_start + 0.5, full_end)
+                range_source = "first 0.5s (auto)"
             
             # Ask for pose type
             from PyQt5.QtWidgets import QInputDialog
             pose_type, ok = QInputDialog.getItem(
                 self,
                 "Calibration Pose",
+                f"Calibration range: {start_time:.2f}s - {end_time:.2f}s ({range_source})\n\n"
                 "Select calibration pose type:",
                 ["N-pose", "T-pose"],
                 0,
@@ -426,9 +442,9 @@ class MainWindow(QMainWindow):
                 "Calibration Complete",
                 f"Calibration performed successfully!\n\n"
                 f"Pose type: {pose_type}\n"
-                f"Duration: {end_time - start_time:.2f} seconds\n"
-                f"Sensors calibrated: {len(self.data_processor.calibration_processor.reference_orientations)}\n\n"
-                f"Use 'Process > Save Calibration' to save for later use."
+                f"Time range: {start_time:.2f}s - {end_time:.2f}s ({range_source})\n"
+                f"Sensors calibrated: {len(self.data_processor.calibration_processor.offset_quaternions)}\n\n"
+                f"Now click 'Process > Process Data' to apply calibration."
             )
         
         except Exception as e:
