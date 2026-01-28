@@ -52,6 +52,7 @@ class MainView(QWidget):
         # Time bar at bottom
         self.time_bar = TimeBar()
         self.time_bar.time_changed.connect(self._on_time_changed)
+        self.time_bar.speed_changed.connect(self.visualization_3d.set_playback_speed)
         layout.addWidget(self.time_bar)
         
         self.setLayout(layout)
