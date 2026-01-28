@@ -53,10 +53,27 @@ class Visualization3D(QWidget):
         self.playback_start_frame = 0   # Frame index at start
         self.sampling_rate = 500.0      # Hz (will be updated from data)
         
+        # Grid wrapping parameters (for treadmill effect)
+        self.grid_wrap_threshold = 0.4  # Faster wrap/reset cycle
+        self.grid_wrap_period = 0.4  # Scaled with grid_scale (0.4/0.2 = 2x)
+        
         # 3D Graphics items
         self.skeleton_items = {}
         self.joint_items = {}
         self.axis_items = {}  # Segment coordinate axes
+        self.grid = None  # Grid item for ground plane
+        self.grid_scale = 0.4  # Store grid scale (larger for better visibility)
+        
+        # Foot contact tracking for grid movement
+        self.foot_contact_right = None
+        self.foot_contact_left = None
+        self.gait_start_frame = None
+        self.gait_end_frame = None
+        self.grid_offset = np.array([0.0, 0.0, 0.0])  # Grid position offset
+        self.reference_foot_pre_gait = None  # Which foot to track before gait_start
+        self.reference_foot_post_gait = None  # Which foot to track after gait_end
+        self._prev_tracked_foot = None  # Track which foot we're currently following
+        self._prev_foot_position = None  # Previous position of tracked foot for displacement calc
         
         self._init_ui()
     
@@ -80,9 +97,9 @@ class Visualization3D(QWidget):
             self.view_widget.setCameraPosition(distance=3.0, elevation=20, azimuth=45)
             
             # Add grid
-            grid = gl.GLGridItem()
-            grid.scale(0.2, 0.2, 0.2)
-            self.view_widget.addItem(grid)
+            self.grid = gl.GLGridItem()
+            self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
+            self.view_widget.addItem(self.grid)
             
             # Add coordinate axes
             self._add_axes()
@@ -196,10 +213,43 @@ class Visualization3D(QWidget):
             # Initialize skeleton
             self._initialize_skeleton()
             self._render_frame(0)
+            # Reset grid offset
+            self.grid_offset = np.array([0.0, 0.0, 0.0])
         else:
             self.frame_label.setText("Frame: 0 / 0")
             self.frame_slider.setEnabled(False)
             self.play_btn.setEnabled(False)
+    
+    def set_foot_contact(self, gait_start_frame: int, gait_end_frame: int, 
+                        foot_contact_right: np.ndarray, foot_contact_left: np.ndarray):
+        """
+        Set foot contact data for grid movement.
+        
+        Args:
+            gait_start_frame: Frame where gait starts (first foot leaves contact)
+            gait_end_frame: Frame where gait ends (both feet return to contact)
+            foot_contact_right: Boolean array indicating right foot contact
+            foot_contact_left: Boolean array indicating left foot contact
+        """
+        self.gait_start_frame = gait_start_frame
+        self.gait_end_frame = gait_end_frame
+        self.foot_contact_right = foot_contact_right
+        self.foot_contact_left = foot_contact_left
+        
+        # Determine reference feet for pre/post gait periods
+        # Pre-gait: use the foot that will be in contact at gait_start_frame
+        if gait_start_frame < len(foot_contact_right):
+            if foot_contact_right[gait_start_frame]:
+                self.reference_foot_pre_gait = 'right'
+            elif foot_contact_left[gait_start_frame]:
+                self.reference_foot_pre_gait = 'left'
+        
+        # Post-gait: use the foot that is in contact at gait_end_frame
+        if gait_end_frame < len(foot_contact_right):
+            if foot_contact_right[gait_end_frame]:
+                self.reference_foot_post_gait = 'right'
+            elif foot_contact_left[gait_end_frame]:
+                self.reference_foot_post_gait = 'left'
     
     def _initialize_skeleton(self):
         """Initialize skeleton graphics items"""
@@ -321,6 +371,9 @@ class Visualization3D(QWidget):
         
         # Update skeleton visualization
         self._update_skeleton(positions)
+        
+        # Update grid position based on foot contact
+        self._update_grid_position(frame_index, positions)
         
         # Emit signal AFTER all updates complete (only if not updating from external source)
         if not self._updating:
@@ -525,6 +578,109 @@ class Visualization3D(QWidget):
             x_axis.setData(pos=np.array([center_pos, center_pos + global_x]))
             y_axis.setData(pos=np.array([center_pos, center_pos + global_y]))
             z_axis.setData(pos=np.array([center_pos, center_pos + global_z]))
+    
+    def _update_grid_position(self, frame_index: int, positions: dict):
+        """
+        Update grid position to follow foot contact during gait.
+        
+        Logic:
+        - Grid follows the displacement (change in position) of the tracked foot
+        - When switching feet, the new foot becomes the tracking target
+        - Grid position changes based on relative movement, not absolute position
+        
+        Grid follows X,Y coordinates only (height Z remains constant)
+        Reference point: center of foot segment = (toe + ankle) / 2
+        """
+        if self.grid is None or self.foot_contact_right is None or self.foot_contact_left is None:
+            return
+        
+        if self.gait_start_frame is None or self.gait_end_frame is None:
+            return
+        
+        # Get foot center positions
+        foot_right_center = (positions['toe_right'] + positions['ankle_right']) / 2
+        foot_left_center = (positions['toe_left'] + positions['ankle_left']) / 2
+        
+        # Determine which foot to track
+        tracked_foot = None
+        tracked_position = None
+        
+        if frame_index < self.gait_start_frame:
+            # Before gait starts: track the pre-gait reference foot
+            tracked_foot = self.reference_foot_pre_gait
+            if tracked_foot == 'right':
+                tracked_position = foot_right_center
+            else:
+                tracked_position = foot_left_center
+        elif frame_index <= self.gait_end_frame:
+            # During gait: track the foot currently in contact
+            if self.foot_contact_right[frame_index]:
+                tracked_foot = 'right'
+                tracked_position = foot_right_center
+            elif self.foot_contact_left[frame_index]:
+                tracked_foot = 'left'
+                tracked_position = foot_left_center
+        else:
+            # After gait ends: track the post-gait reference foot
+            tracked_foot = self.reference_foot_post_gait
+            if tracked_foot == 'right':
+                tracked_position = foot_right_center
+            else:
+                tracked_position = foot_left_center
+        
+        # If no valid foot to track, do nothing
+        if tracked_foot is None or tracked_position is None:
+            return
+        
+        # Initialize prev_position if not set (first frame or after switch)
+        if not hasattr(self, '_prev_tracked_foot') or self._prev_tracked_foot != tracked_foot:
+            # Foot switched or first initialization
+            self._prev_tracked_foot = tracked_foot
+            self._prev_foot_position = tracked_position.copy()
+            # Snap to nearest grid boundary while keeping visual pattern seamless
+            # Store the visual grid position (using modulo)
+            visual_x = self.grid_offset[0] % self.grid_wrap_period
+            visual_y = self.grid_offset[1] % self.grid_wrap_period
+            # Update grid to this position
+            self.grid.resetTransform()
+            self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
+            self.grid.translate(visual_x, visual_y, self.grid_offset[2])
+            # Update offset to match the visual position (keeps it small, near origin)
+            self.grid_offset = np.array([visual_x, visual_y, self.grid_offset[2]])
+            # Don't update grid on switch, just set baseline for next calculation
+            return
+        
+        # Calculate displacement of the tracked foot
+        displacement = tracked_position - self._prev_foot_position
+        
+        # Apply displacement to grid (only X, Y components)
+        self.grid_offset[0] += displacement[0]
+        self.grid_offset[1] += displacement[1]
+        
+        # Update previous position for next frame
+        self._prev_foot_position = tracked_position.copy()
+        
+        # Apply wrapping to keep grid visible (treadmill effect)
+        # Reset offset when it exceeds threshold, using modulo for seamless grid pattern
+        grid_translate_x = self.grid_offset[0]
+        grid_translate_y = self.grid_offset[1]
+        
+        # Wrap offset to keep grid in view and maintain seamless pattern
+        if abs(self.grid_offset[0]) > self.grid_wrap_threshold:
+            self.grid_offset[0] = self.grid_offset[0] % self.grid_wrap_period
+            self.grid_offset[1] = self.grid_offset[1] % self.grid_wrap_period  # Also reset Y axis
+        
+        if abs(self.grid_offset[1]) > self.grid_wrap_threshold:
+            self.grid_offset[0] = self.grid_offset[0] % self.grid_wrap_period  # Also reset X axis
+            self.grid_offset[1] = self.grid_offset[1] % self.grid_wrap_period
+        
+        grid_translate_x = self.grid_offset[0]
+        grid_translate_y = self.grid_offset[1]
+        
+        # Apply offset to grid (restore scale and apply translation)
+        self.grid.resetTransform()
+        self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
+        self.grid.translate(grid_translate_x, grid_translate_y, self.grid_offset[2])
     
     def _on_slider_changed(self, value: int):
         """Handle frame slider changes (manual scrubbing)"""

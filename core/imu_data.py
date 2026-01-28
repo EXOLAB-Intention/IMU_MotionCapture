@@ -145,6 +145,12 @@ class MotionCaptureData:
     joint_angles: Optional[JointAngles] = None
     kinematics: Optional[KinematicsData] = None
     
+    # Gait parameters
+    gait_start_frame: Optional[int] = None  # Frame where first foot leaves contact
+    gait_end_frame: Optional[int] = None    # Frame where both feet return to contact
+    foot_contact_right: Optional[np.ndarray] = None  # Right foot contact boolean array
+    foot_contact_left: Optional[np.ndarray] = None   # Left foot contact boolean array
+    
     # Calibration data
     calibration_pose: Optional[str] = None
     calibration_duration: Optional[float] = None

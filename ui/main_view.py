@@ -104,6 +104,18 @@ class MainView(QWidget):
         # Update 3D visualization
         self.visualization_3d.set_data(motion_data)
         
+        # Pass foot contact data to visualization for grid movement
+        if (motion_data and motion_data.gait_start_frame is not None and 
+            motion_data.gait_end_frame is not None and
+            motion_data.foot_contact_right is not None and
+            motion_data.foot_contact_left is not None):
+            self.visualization_3d.set_foot_contact(
+                motion_data.gait_start_frame,
+                motion_data.gait_end_frame,
+                motion_data.foot_contact_right,
+                motion_data.foot_contact_left
+            )
+        
         # Update graph view
         self.graph_view.set_data(motion_data)
         
