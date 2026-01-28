@@ -15,7 +15,6 @@ from typing import Tuple, List, Optional, Dict
 from core.imu_data import MotionCaptureData, JointAngles
 
 import pandas as pd
-from core.calibration import CalibrationProcessor
 
 
 class KinematicsProcessor:
@@ -155,7 +154,7 @@ class KinematicsProcessor:
         gyro_threshold: float = 0.5,
         window_size: int = 10,
         min_contact_duration: int = 20
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[int, int, np.ndarray, np.ndarray]:
         """
         Detect foot contact events using IMU acceleration and gyroscope
         
@@ -168,7 +167,12 @@ class KinematicsProcessor:
             min_contact_duration: Minimum samples for contact event
             
         Returns:
-            Tuple of (foot_contact_right, foot_contact_left) boolean arrays
+            Tuple of (gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left)
+            where:
+                - gait_start_frame (int): Frame where first foot leaves double support
+                - gait_end_frame (int): Frame where both feet return to contact at end
+                - foot_contact_right: Modified boolean array (no simultaneous contact/non-contact)
+                - foot_contact_left: Modified boolean array (no simultaneous contact/non-contact)
         """
         
         # Extract foot IMU data from MotionCaptureData
@@ -201,7 +205,11 @@ class KinematicsProcessor:
             window_size, min_contact_duration
         )
         
-        return foot_contact_right, foot_contact_left
+        # Post-processing: find gait frames and enforce constraints
+        gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
+            self._process_gait_cycle(foot_contact_right, foot_contact_left)
+        
+        return (gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left)
     
     def _detect_contact_single(
         self,
@@ -296,6 +304,167 @@ class KinematicsProcessor:
                 cleaned[start:end] = False
         
         return cleaned
+    
+    def _process_gait_cycle(
+        self,
+        foot_contact_right: np.ndarray,
+        foot_contact_left: np.ndarray
+    ) -> Tuple[int, int, np.ndarray, np.ndarray]:
+        """
+        Process foot contact arrays to extract gait cycle and enforce constraints
+        
+        Rules:
+            1. Find gait_start_frame: first frame where one foot leaves initial double support
+            2. Find gait_end_frame: first frame where both feet return to contact at the end
+            3. Between gait_start and gait_end:
+               - Remove simultaneous contact: keep only the foot that contacted earlier
+               - Remove simultaneous non-contact: keep the foot that was last in contact
+        
+        Args:
+            foot_contact_right: Right foot contact boolean array
+            foot_contact_left: Left foot contact boolean array
+            
+        Returns:
+            Tuple of (gait_start_frame, gait_end_frame, modified_right, modified_left)
+        """
+        N = len(foot_contact_right)
+        right = foot_contact_right.copy().astype(bool)
+        left = foot_contact_left.copy().astype(bool)
+        
+        # Step 1: Find gait_start_frame
+        # Find first frame where both are True
+        both_contact = right & left
+        first_both_idx = np.where(both_contact)[0]
+        
+        if len(first_both_idx) == 0:
+            # No double support at start, use first frame
+            gait_start_frame = 0
+        else:
+            # Find first frame after initial double support where one foot leaves
+            start_region = first_both_idx[0]
+            # Look for first break in double support after start_region
+            gait_start_frame = None
+            for i in range(start_region, N):
+                if not (right[i] and left[i]):
+                    gait_start_frame = i
+                    break
+            if gait_start_frame is None:
+                gait_start_frame = N - 1
+        
+        # Step 2: Find gait_end_frame
+        # Find last section where both are True continuously
+        gait_end_frame = None
+        for i in range(N - 1, -1, -1):
+            if right[i] and left[i]:
+                # Check if this is the start of a final double support region
+                # by checking if before this point there was single support
+                if i == 0 or not (right[i-1] and left[i-1]):
+                    gait_end_frame = i
+                    break
+        
+        if gait_end_frame is None:
+            gait_end_frame = N - 1
+        
+        # Step 3: Apply post-processing rules between gait_start_frame and gait_end_frame (exclusive)
+        if gait_start_frame < gait_end_frame:
+            right, left = self._enforce_gait_constraints(right, left, gait_start_frame, gait_end_frame - 1)
+        
+        # Step 4: Ensure both feet are True from gait_end_frame to the end
+        right[gait_end_frame:] = True
+        left[gait_end_frame:] = True
+        
+        return gait_start_frame, gait_end_frame, right, left
+    
+    def _enforce_gait_constraints(
+        self,
+        right: np.ndarray,
+        left: np.ndarray,
+        start_frame: int,
+        end_frame: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Enforce gait constraints between start_frame and end_frame
+        
+        Rule 1: Remove simultaneous contact
+            If both feet contact at same frame, keep only the foot that contacted earlier
+        Rule 2: Remove simultaneous non-contact
+            If both feet not in contact at same frame, keep the foot that was last in contact
+        
+        Args:
+            right: Right foot contact array
+            left: Left foot contact array
+            start_frame: Gait cycle start
+            end_frame: Gait cycle end
+            
+        Returns:
+            Modified (right, left) arrays
+        """
+        right = right.copy()
+        left = left.copy()
+        
+        # Process each frame in the gait cycle
+        for i in range(start_frame, end_frame + 1):
+            both_contact = right[i] and left[i]
+            both_notcontact = (not right[i]) and (not left[i])
+            
+            if both_contact:
+                # Rule 1: Remove simultaneous contact
+                # Keep the foot that contacted earlier (look back to find which one contacted first)
+                if i == start_frame:
+                    # At start, keep both or arbitrarily choose one (keep right)
+                    pass
+                else:
+                    # Find which foot broke contact first before this frame
+                    # by looking backward for the most recent contact change
+                    right_contact_frame = -1
+                    left_contact_frame = -1
+                    
+                    for j in range(i - 1, start_frame - 1, -1):
+                        if not right[j] and right_contact_frame == -1:
+                            right_contact_frame = j
+                        if not left[j] and left_contact_frame == -1:
+                            left_contact_frame = j
+                        if right_contact_frame != -1 and left_contact_frame != -1:
+                            break
+                    
+                    # The foot that broke contact later should be kept contacting
+                    # (i.e., the one with larger frame index of non-contact)
+                    if right_contact_frame > left_contact_frame:
+                        # Right broke contact more recently, so it re-established first
+                        # Keep right, remove left
+                        left[i] = False
+                    elif left_contact_frame > right_contact_frame:
+                        # Left broke contact more recently, so it re-established first
+                        # Keep left, remove right
+                        right[i] = False
+                    else:
+                        # Both broke contact at same frame - shouldn't happen, keep right
+                        left[i] = False
+            
+            elif both_notcontact:
+                # Rule 2: Remove simultaneous non-contact
+                # Keep the foot that was in contact most recently
+                right_last_contact = -1
+                left_last_contact = -1
+                
+                for j in range(i - 1, -1, -1):
+                    if right[j] and right_last_contact == -1:
+                        right_last_contact = j
+                    if left[j] and left_last_contact == -1:
+                        left_last_contact = j
+                    if right_last_contact != -1 and left_last_contact != -1:
+                        break
+                
+                # Set the foot that was last in contact to be in contact
+                if right_last_contact > left_last_contact:
+                    right[i] = True
+                elif left_last_contact > right_last_contact:
+                    left[i] = True
+                else:
+                    # Both never contacted or contacted at same frame - keep right
+                    right[i] = True
+        
+        return right, left
     
     def compute_velocity(
         self, 
