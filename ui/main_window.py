@@ -103,6 +103,21 @@ class MainWindow(QMainWindow):
         
         # Main view signals
         self.main_view.process_requested.connect(self.process_data)
+        self.main_view.mode_changed.connect(self.update_mode)
+
+    @pyqtSlot(str)
+    def update_mode(self, mode_name: str):
+        """Update settings when switching mode"""
+        formatted_mode = "Upper-body" if mode_name == "Upper-body" else "Lower-body"
+        app_settings.mode.mode_type = formatted_mode
+        app_settings.refresh_sensor_mapping()
+        
+        self.statusBar().showMessage(f"Switched to {formatted_mode} mode", 3000)
+        self._update_calibration_status()
+        
+        # Check if current data matches mode
+        if self.current_data and not self.current_data.has_all_sensors:
+            self.statusBar().showMessage(f"Warning: Data incomplete for {formatted_mode}", 5000)
     
     @pyqtSlot(str)
     def import_file(self, filepath: str):
@@ -125,11 +140,12 @@ class MainWindow(QMainWindow):
             
             # Check if all sensors are present
             if not data.has_all_sensors:
+                current_mode = app_settings.mode.mode_type
                 QMessageBox.warning(
                     self,
                     "Incomplete Data",
-                    "Not all required sensors are present in the data.\n"
-                    "Expected 7 sensors for lower body."
+                    f"Not all required sensors are present for {current_mode} in the data.\n"
+                    f"Please check your sensor mapping and mode settings."
                 )
         
         except Exception as e:
@@ -277,10 +293,11 @@ class MainWindow(QMainWindow):
             
             self.statusBar().showMessage("Processing complete", 3000)
             
+            current_mode = app_settings.mode.mode_type
             QMessageBox.information(
                 self,
                 "Processing Complete",
-                "Motion data has been processed successfully.\n\n"
+                f"{current_mode} motion data has been processed successfully.\n\n"
                 f"Calibration: {self.data_processor.calibration_processor.pose_type}\n"
                 "Joint angles and kinematics have been computed."
             )

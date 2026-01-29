@@ -4,7 +4,7 @@ Main view component combining 3D visualization, graph view, and controls
 import numpy as np
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, 
-    QPushButton, QLabel, QToolBar, QAction
+    QPushButton, QLabel, QToolBar, QAction, QActionGroup
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -18,10 +18,12 @@ class MainView(QWidget):
     
     # Signals
     process_requested = pyqtSignal()
+    mode_changed = pyqtSignal(str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_data = None
+        self.current_mode = "Lower-body"
         self._init_ui()
     
     def _init_ui(self):
@@ -63,7 +65,26 @@ class MainView(QWidget):
     def _create_toolbar(self) -> QToolBar:
         """Create toolbar with view options"""
         toolbar = QToolBar()
+
+        # Mode change toggle
+        mode_group = QActionGroup(self)
+
+        self.lower_mode_action = QAction("Lower Body", self)
+        self.lower_mode_action.setCheckable(True)
+        self.lower_mode_action.setChecked(True)
+        self.lower_mode_action.triggered.connect(lambda: self._on_mode_switch("Lower-body"))
+
+        self.upper_mode_action = QAction("Upper Body", self)
+        self.upper_mode_action.setCheckable(True)
+        self.upper_mode_action.triggered.connect(lambda: self._on_mode_switch("Upper-body"))
+
+        mode_group.addAction(self.lower_mode_action)
+        mode_group.addAction(self.upper_mode_action)
+        toolbar.addAction(self.lower_mode_action)
+        toolbar.addAction(self.upper_mode_action)
         
+        toolbar.addSeparator()
+
         # Split view toggle
         self.split_action = QAction("Split View", self)
         self.split_action.setCheckable(True)
@@ -85,6 +106,13 @@ class MainView(QWidget):
         toolbar.addWidget(self.status_label)
         
         return toolbar
+    
+    def _on_mode_switch(self, mode: str):
+        """Handle body mode switching"""
+        self.current_mode = mode
+        print(f"Switching to {mode} mode")
+    
+        self.mode_changed.emit(mode)
     
     def _toggle_split_view(self, checked: bool):
         """Toggle split view mode"""
@@ -119,6 +147,7 @@ class MainView(QWidget):
             # Update status
             processed_status = "Processed" if motion_data.is_processed else "Not Processed"
             self.status_label.setText(
+                f"Mode: {self.current_mode} | "
                 f"Session: {motion_data.session_id} | "
                 f"Duration: {duration:.2f}s | "
                 f"Status: {processed_status}"
@@ -163,6 +192,7 @@ class MainView(QWidget):
         self.time_bar.reset()
         self.status_label.setText("No data loaded")
         self.current_data = None
+        self.current_mode = "Lower-body"
     
     def get_selected_time_range(self) -> tuple:
         """Get selected time range from time bar"""

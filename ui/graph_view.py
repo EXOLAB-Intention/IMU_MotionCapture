@@ -39,7 +39,7 @@ class GraphView(QWidget):
         
         # Joint selection
         self.joint_combo = QComboBox()
-        self.joint_combo.addItems(['Hip', 'Knee', 'Ankle'])
+        self.joint_combo.addItems(['Hip', 'Knee', 'Ankle', 'Shoulder', 'Elbow'])
         self.joint_combo.currentTextChanged.connect(self._update_graph)
         
         # Side selection

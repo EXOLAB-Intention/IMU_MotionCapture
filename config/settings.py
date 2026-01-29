@@ -4,6 +4,13 @@ Configuration settings for IMU Motion Capture System
 from dataclasses import dataclass
 from typing import Optional
 
+@dataclass
+class ModeConfig:
+    """Body mode configuration"""
+    mode_type: str = "Lower-body" # Lower-body or Upper-body
+
+    # Mode options
+    MODE_TYPES = ["Lower-body", "Upper-body"]
 
 @dataclass
 class IMUConfig:
@@ -13,7 +20,7 @@ class IMUConfig:
     num_sensors: int = 7
     
     # IMU placement
-    sensor_locations = [
+    sensor_locations_lower = [
         "trunk",
         "thigh_right",
         "shank_right",
@@ -22,6 +29,19 @@ class IMUConfig:
         "shank_left",
         "foot_left"
     ]
+
+    sensor_locations_upper = [
+        "pelvis",
+        "chest",
+        "head",
+        "upperarm_right",
+        "lowerarm_right",
+        "upperarm_left",
+        "lowerarm_left"
+    ]
+
+    def get_locations(self, mode: str):
+        return self.sensor_locations_upper if mode == "Upper-body" else self.sensor_locations_lower
 
 
 @dataclass
@@ -46,6 +66,11 @@ class SubjectConfig:
     thigh_ratio: float = 0.232
     shank_ratio: float = 0.246
     foot_ratio: float = 0.152
+    upperarm_ratio: float = 0.186
+    lowerarm_ratio: float = 0.146
+    pelvis_chest_ratio: float = 0.190
+    chest_neck_ratio: float = 0.150
+    chest_shoulder_ratio: float = 0.156
 
 
 @dataclass
@@ -85,7 +110,9 @@ class GUIConfig:
     graph_colors = {
         'hip': '#FF6B6B',
         'knee': '#4ECDC4',
-        'ankle': '#45B7D1'
+        'ankle': '#45B7D1',
+        'shoulder': "#6BFF97",
+        'elbow': "#4ECD8D"
     }
 
 
@@ -93,6 +120,7 @@ class AppSettings:
     """Application-wide settings"""
     
     def __init__(self):
+        self.mode = ModeConfig()
         self.imu = IMUConfig()
         self.calibration = CalibrationConfig()
         self.subject = SubjectConfig()
@@ -105,16 +133,23 @@ class AppSettings:
         self.working_directory: Optional[str] = None
         self.recent_files: list = []
         
-        # Sensor mapping
-        self.sensor_mapping: dict = {
-            "trunk": None,
-            "thigh_right": None,
-            "shank_right": None,
-            "foot_right": None,
-            "thigh_left": None,
-            "shank_left": None,
-            "foot_left": None
-        }
+        self.refresh_sensor_mapping()
+
+    def refresh_sensor_mapping(self):
+        """현재 모드에 맞는 센서 위치들로 매핑 테이블 초기화"""
+        locations = self.imu.get_locations(self.mode.mode_type)
+        self.sensor_mapping = {loc: None for loc in locations}
+
+        # # Sensor mapping
+        # self.sensor_mapping: dict = {
+        #     "trunk": None,
+        #     "thigh_right": None,
+        #     "shank_right": None,
+        #     "foot_right": None,
+        #     "thigh_left": None,
+        #     "shank_left": None,
+        #     "foot_left": None
+        # }
     
     def update_sensor_mapping(self, location: str, sensor_id: int):
         """Update sensor ID for a specific body location"""
@@ -127,7 +162,9 @@ class AppSettings:
             'trunk': self.subject.trunk_ratio,
             'thigh': self.subject.thigh_ratio,
             'shank': self.subject.shank_ratio,
-            'foot': self.subject.foot_ratio
+            'foot': self.subject.foot_ratio,
+            'upperarm': self.subject.upperarm_ratio,
+            'lowerarm': self.subject.lowerarm_ratio
         }
         return self.subject.height * ratios.get(segment, 0.0)
     
