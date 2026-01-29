@@ -215,6 +215,11 @@ class Visualization3D(QWidget):
             self._render_frame(0)
             # Reset grid offset
             self.grid_offset = np.array([0.0, 0.0, 0.0])
+            
+            # Detect foot contact if not already detected
+            # This allows grid movement even without calibration
+            if motion_data.foot_contact_right is None or motion_data.foot_contact_left is None:
+                self._auto_detect_foot_contact(motion_data)
         else:
             self.frame_label.setText("Frame: 0 / 0")
             self.frame_slider.setEnabled(False)
@@ -250,6 +255,40 @@ class Visualization3D(QWidget):
                 self.reference_foot_post_gait = 'right'
             elif foot_contact_left[gait_end_frame]:
                 self.reference_foot_post_gait = 'left'
+    
+    def _auto_detect_foot_contact(self, motion_data):
+        """
+        Automatically detect foot contact when data is not already processed.
+        This allows grid movement to work even without calibration.
+        
+        Args:
+            motion_data: MotionCaptureData object
+        """
+        try:
+            from core.kinematics import KinematicsProcessor
+            
+            # Check if foot sensors are available
+            if 'foot_right' not in motion_data.imu_data or 'foot_left' not in motion_data.imu_data:
+                print("Warning: Foot sensors not found. Grid movement will not work.")
+                return
+            
+            # Create kinematics processor and detect foot contact
+            kinematics_processor = KinematicsProcessor()
+            gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
+                kinematics_processor.detect_foot_contact(motion_data)
+            
+            # Set the detected foot contact data
+            self.set_foot_contact(gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left)
+            
+            # Also update the motion_data so it's preserved
+            motion_data.gait_start_frame = gait_start_frame
+            motion_data.gait_end_frame = gait_end_frame
+            motion_data.foot_contact_right = foot_contact_right
+            motion_data.foot_contact_left = foot_contact_left
+            
+        except Exception as e:
+            print(f"Error detecting foot contact: {e}")
+            print("Grid movement will not work. Make sure foot sensors are available.")
     
     def _initialize_skeleton(self):
         """Initialize skeleton graphics items"""
