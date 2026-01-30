@@ -3,8 +3,9 @@
 Provides interactive 3D skeleton rendering with smooth playback
 """
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QSlider
-from PyQt5.QtCore import pyqtSignal, QTimer, Qt
+from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot
 import numpy as np
+from config.settings import app_settings
 
 try:
     import pyqtgraph as pg
@@ -36,6 +37,10 @@ class Visualization3D(QWidget):
         'thigh': 0.40,     # Hip to knee
         'shank': 0.42,     # Knee to ankle
         'foot': 0.25,      # Ankle to toe
+        # Upper body segments can be added similarly
+        'spine': 0.50,     # Pelvis to chest
+        'upperarm': 0.25,  # Shoulder to elbow
+        'lowerarm': 0.25   # Elbow to wrist
     }
     
     def __init__(self, parent=None):
@@ -200,6 +205,13 @@ class Visualization3D(QWidget):
             self.frame_label.setText("Frame: 0 / 0")
             self.frame_slider.setEnabled(False)
             self.play_btn.setEnabled(False)
+
+    @pyqtSlot(str)
+    def refresh_view_mode(self, mode_name: str):
+        """ Refresh the 3D view when the mode changes (e.g., Lower-body to Upper-body) """
+        if self.current_data:
+            self._initialize_skeleton()
+            self._render_frame(self.current_frame)
     
     def _initialize_skeleton(self):
         """Initialize skeleton graphics items"""
@@ -219,18 +231,33 @@ class Visualization3D(QWidget):
         self.joint_items.clear()
         self.axis_items.clear()
         
-        # Define segments and their colors
-        segments = {
-            'trunk': (1.0, 1.0, 1.0, 1.0),      # White
-            'pelvis': (0.8, 0.8, 0.8, 1.0),     # Gray (connects left and right hip)
-            'thigh_right': (1.0, 0.3, 0.3, 1.0),  # Red
-            'thigh_left': (0.3, 0.3, 1.0, 1.0),   # Blue
-            'shank_right': (1.0, 0.5, 0.5, 1.0),  # Light red
-            'shank_left': (0.5, 0.5, 1.0, 1.0),   # Light blue
-            'foot_right': (1.0, 0.7, 0.7, 1.0),   # Lighter red
-            'foot_left': (0.7, 0.7, 1.0, 1.0),    # Lighter blue
-        }
-        
+        current_mode = app_settings.mode.mode_type
+        if current_mode == 'Upper-body':
+            segments = {
+                'spine': (1.0, 1.0, 1.0, 1.0),        # White
+                'shoulder': (0.8, 0.8, 0.8, 1.0),     # Gray (connects left and right shoulder)
+                'upperarm_right': (1.0, 0.3, 0.3, 1.0),  # Red
+                'upperarm_left': (0.3, 0.3, 1.0, 1.0),   # Blue
+                'lowerarm_right': (1.0, 0.5, 0.5, 1.0),  # Light red
+                'lowerarm_left': (0.5, 0.5, 1.0, 1.0),   # Light blue
+            }
+            joint_names = ['shoulder', 'rshoulder', 'lshoulder', 'elbow_right', 'elbow_left', 'wrist_right', 'wrist_left']
+            segment_names = ['spine', 'upperarm_right', 'upperarm_left', 'lowerarm_right', 'lowerarm_left']
+        else:
+            # Define segments and their colors
+            segments = {
+                'trunk': (1.0, 1.0, 1.0, 1.0),      # White
+                'pelvis': (0.8, 0.8, 0.8, 1.0),     # Gray (connects left and right hip)
+                'thigh_right': (1.0, 0.3, 0.3, 1.0),  # Red
+                'thigh_left': (0.3, 0.3, 1.0, 1.0),   # Blue
+                'shank_right': (1.0, 0.5, 0.5, 1.0),  # Light red
+                'shank_left': (0.5, 0.5, 1.0, 1.0),   # Light blue
+                'foot_right': (1.0, 0.7, 0.7, 1.0),   # Lighter red
+                'foot_left': (0.7, 0.7, 1.0, 1.0),    # Lighter blue
+            }
+            joint_names = ['hip', 'rhip', 'lhip', 'knee_right', 'knee_left', 'ankle_right', 'ankle_left', 'toe_right', 'toe_left']
+            segment_names = ['trunk', 'thigh_right', 'thigh_left', 'shank_right', 'shank_left', 'foot_right', 'foot_left']
+
         # Create line items for each segment
         for segment_name, color in segments.items():
             line_item = gl.GLLinePlotItem(
@@ -243,7 +270,6 @@ class Visualization3D(QWidget):
             self.skeleton_items[segment_name] = line_item
         
         # Create joint spheres (including rhip, lhip)
-        joint_names = ['hip', 'rhip', 'lhip', 'knee_right', 'knee_left', 'ankle_right', 'ankle_left', 'toe_right', 'toe_left']
         for joint_name in joint_names:
             mesh = gl.MeshData.sphere(rows=10, cols=10, radius=0.03)
             joint_item = gl.GLMeshItem(
@@ -256,7 +282,6 @@ class Visualization3D(QWidget):
             self.joint_items[joint_name] = joint_item
         
         # Create coordinate axes for each segment
-        segment_names = ['trunk', 'thigh_right', 'thigh_left', 'shank_right', 'shank_left', 'foot_right', 'foot_left']
         for segment_name in segment_names:
             # X-axis (red)
             x_axis = gl.GLLinePlotItem(

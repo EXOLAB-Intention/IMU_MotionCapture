@@ -5,12 +5,6 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List
 from datetime import datetime
-from enum import Enum
-
-
-class CaptureMode(Enum):
-    LOWER_BODY = "Lower-body"
-    UPPER_BODY = "Upper-body"
 
 @dataclass
 class IMUSample:
@@ -110,10 +104,10 @@ class JointAngles:
     ankle_left: np.ndarray  # (N, 3)
 
     # Upper body joints
-    shoulder_right: np.ndarray  # (N, 3)
-    shoulder_left: np.ndarray  # (N, 3)
-    elbow_right: np.ndarray  # (N, 3)
-    elbow_left: np.ndarray  # (N, 3)
+    shoulder_right: Optional[np.ndarray] = None  # (N, 3)
+    shoulder_left: Optional[np.ndarray] = None  # (N, 3)
+    elbow_right: Optional[np.ndarray] = None  # (N, 3)
+    elbow_left: Optional[np.ndarray] = None  # (N, 3)
     
     def get_joint_angle(self, joint: str, side: str) -> np.ndarray:
         """Get specific joint angle time series"""
@@ -148,7 +142,6 @@ class MotionCaptureData:
     # Metadata
     session_id: str
     creation_time: datetime
-    mode: CaptureMode = CaptureMode.LOWER_BODY
     subject_id: Optional[str] = None
     
     # Raw IMU data (keyed by location)
@@ -211,7 +204,11 @@ class MotionCaptureData:
     @property
     def required_locations(self) -> List[str]:
         """Get required sensor locations based on capture mode"""
-        if self.mode == CaptureMode.LOWER_BODY:
+
+        from config.settings import app_settings
+        current_mode = app_settings.mode.mode_type
+
+        if current_mode == 'Lower-body':
             return ["trunk", "thigh_right", "shank_right", "foot_right", 
                     "thigh_left", "shank_left", "foot_left"]
         else:

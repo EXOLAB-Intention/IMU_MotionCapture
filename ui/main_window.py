@@ -104,6 +104,7 @@ class MainWindow(QMainWindow):
         # Main view signals
         self.main_view.process_requested.connect(self.process_data)
         self.main_view.mode_changed.connect(self.update_mode)
+        self.main_view.mode_changed.connect(self.main_view.visualization_3d.refresh_view_mode)
 
     @pyqtSlot(str)
     def update_mode(self, mode_name: str):
