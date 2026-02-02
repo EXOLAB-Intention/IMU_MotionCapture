@@ -411,13 +411,15 @@ class Visualization3D(QWidget):
             spine_local_dir = np.array([-self.SEGMENT_LENGTHS['spine'], 0.0, 0.0])
             
             # upperarm/lowerarm: IMU x-axis points UP, but arm points DOWN → local -X is segment direction
-            upperarm_local_dir = np.array([-self.SEGMENT_LENGTHS['upperarm'], 0.0, 0.0])
-            lowerarm_local_dir = np.array([-self.SEGMENT_LENGTHS['lowerarm'], 0.0, 0.0])
+            upperarm_r_local_dir = np.array([0.0, self.SEGMENT_LENGTHS['upperarm'], 0.0])
+            upperarm_l_local_dir = np.array([0.0, -self.SEGMENT_LENGTHS['upperarm'], 0.0])
+            lowerarm_r_local_dir = np.array([0.0, self.SEGMENT_LENGTHS['lowerarm'], 0.0])
+            lowerarm_l_local_dir = np.array([0.0, -self.SEGMENT_LENGTHS['lowerarm'], 0.0])
             
             # Shoulder offsets in spine's local frame (y-right means -Y is left)
             # spine: y-right, so right shoulder offset is local -Y, left shoulder offset is local +Y
-            rshoulder_local_offset = np.array([0.0, -0.15, 0.0])
-            lshoulder_local_offset = np.array([0.0, 0.15, 0.0])
+            rshoulder_local_offset = np.array([0.0, 0.15, 0.0])
+            lshoulder_local_offset = np.array([0.0, -0.15, 0.0])
             
             # ============================================================
             # Forward Kinematics: rotate local directions to global frame
@@ -437,20 +439,20 @@ class Visualization3D(QWidget):
             positions['lshoulder'] = lshoulder_pos
 
             # Right arm chain
-            upperarm_r_dir = rotate_vector(upperarm_local_dir, q_upperarm_r)
+            upperarm_r_dir = rotate_vector(upperarm_r_local_dir, q_upperarm_r)
             elbow_r_pos = rshoulder_pos + upperarm_r_dir
             positions['elbow_right'] = elbow_r_pos
             
-            lowerarm_r_dir = rotate_vector(lowerarm_local_dir, q_lowerarm_r)
+            lowerarm_r_dir = rotate_vector(lowerarm_r_local_dir, q_lowerarm_r)
             wrist_r_pos = elbow_r_pos + lowerarm_r_dir
             positions['wrist_right'] = wrist_r_pos
             
             # Left arm chain
-            upperarm_l_dir = rotate_vector(upperarm_local_dir, q_upperarm_l)
+            upperarm_l_dir = rotate_vector(upperarm_l_local_dir, q_upperarm_l)
             elbow_l_pos = lshoulder_pos + upperarm_l_dir
             positions['elbow_left'] = elbow_l_pos
             
-            lowerarm_l_dir = rotate_vector(lowerarm_local_dir, q_lowerarm_l)
+            lowerarm_l_dir = rotate_vector(lowerarm_l_local_dir, q_lowerarm_l)
             wrist_l_pos = elbow_l_pos + lowerarm_l_dir
             positions['wrist_left'] = wrist_l_pos
 

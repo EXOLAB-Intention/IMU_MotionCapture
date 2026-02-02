@@ -361,6 +361,7 @@ class MainWindow(QMainWindow):
                 "Calibration Loaded",
                 f"Calibration loaded successfully!\n"
                 f"Pose type: {self.data_processor.calibration_processor.pose_type}\n"
+                f"mode: {self.data_processor.calibration_processor.mode}\n"
                 f"Sensors: {len(self.data_processor.calibration_processor.offset_quaternions)}"
             )
         
@@ -441,6 +442,8 @@ class MainWindow(QMainWindow):
             if not ok:
                 return
             
+            current_mode = app_settings.mode.mode_type
+
             self.statusBar().showMessage("Performing calibration...")
             
             # Perform calibration
@@ -448,7 +451,8 @@ class MainWindow(QMainWindow):
                 self.current_data,
                 start_time,
                 end_time,
-                pose_type
+                pose_type,
+                current_mode
             )
             
             self.statusBar().showMessage("Calibration complete", 3000)
@@ -460,6 +464,7 @@ class MainWindow(QMainWindow):
                 "Calibration Complete",
                 f"Calibration performed successfully!\n\n"
                 f"Pose type: {pose_type}\n"
+                f"mode: {current_mode}\n"
                 f"Time range: {start_time:.2f}s - {end_time:.2f}s ({range_source})\n"
                 f"Sensors calibrated: {len(self.data_processor.calibration_processor.offset_quaternions)}\n\n"
                 f"Now click 'Process > Process Data' to apply calibration."
