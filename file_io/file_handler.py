@@ -13,6 +13,7 @@ from pathlib import Path
 from core.imu_data import (
     MotionCaptureData, IMUSensorData, JointAngles, KinematicsData
 )
+from config.settings import app_settings
 
 
 class FileHandler:
@@ -94,57 +95,111 @@ class FileHandler:
         print(f"  Time range: {timestamps[0]:.3f}s to {timestamps[-1]:.3f}s")
         
         # Sensor mapping
-        sensor_configs = [
-            {
-                'location': 'trunk',
-                'sensor_id': 0,
-                'quat_cols': ['TrunkIMU_QuatW', 'TrunkIMU_QuatX', 'TrunkIMU_QuatY', 'TrunkIMU_QuatZ'],
-                'acc_cols': ['TrunkIMU_LocalAccX', 'TrunkIMU_LocalAccY', 'TrunkIMU_LocalAccZ'],
-                'gyr_cols': ['TrunkIMU_LocalGyrX', 'TrunkIMU_LocalGyrY', 'TrunkIMU_LocalGyrZ']
-            },
-            {
-                'location': 'thigh_left',
-                'sensor_id': 1,
-                'quat_cols': ['L_THIGH_IMU_QuatW', 'L_THIGH_IMU_QuatX', 'L_THIGH_IMU_QuatY', 'L_THIGH_IMU_QuatZ'],
-                'acc_cols': ['L_THIGH_IMU_AccX', 'L_THIGH_IMU_AccY', 'L_THIGH_IMU_AccZ'],
-                'gyr_cols': ['L_THIGH_IMU_GyrX', 'L_THIGH_IMU_GyrY', 'L_THIGH_IMU_GyrZ']
-            },
-            {
-                'location': 'shank_left',
-                'sensor_id': 2,
-                'quat_cols': ['L_SHANK_IMU_QuatW', 'L_SHANK_IMU_QuatX', 'L_SHANK_IMU_QuatY', 'L_SHANK_IMU_QuatZ'],
-                'acc_cols': ['L_SHANK_IMU_AccX', 'L_SHANK_IMU_AccY', 'L_SHANK_IMU_AccZ'],
-                'gyr_cols': ['L_SHANK_IMU_GyrX', 'L_SHANK_IMU_GyrY', 'L_SHANK_IMU_GyrZ']
-            },
-            {
-                'location': 'foot_left',
-                'sensor_id': 3,
-                'quat_cols': ['L_FOOT_IMU_QuatW', 'L_FOOT_IMU_QuatX', 'L_FOOT_IMU_QuatY', 'L_FOOT_IMU_QuatZ'],
-                'acc_cols': ['L_FOOT_IMU_AccX', 'L_FOOT_IMU_AccY', 'L_FOOT_IMU_AccZ'],
-                'gyr_cols': ['L_FOOT_IMU_GyrX', 'L_FOOT_IMU_GyrY', 'L_FOOT_IMU_GyrZ']
-            },
-            {
-                'location': 'thigh_right',
-                'sensor_id': 4,
-                'quat_cols': ['R_THIGH_IMU_QuatW', 'R_THIGH_IMU_QuatX', 'R_THIGH_IMU_QuatY', 'R_THIGH_IMU_QuatZ'],
-                'acc_cols': ['R_THIGH_IMU_AccX', 'R_THIGH_IMU_AccY', 'R_THIGH_IMU_AccZ'],
-                'gyr_cols': ['R_THIGH_IMU_GyrX', 'R_THIGH_IMU_GyrY', 'R_THIGH_IMU_GyrZ']
-            },
-            {
-                'location': 'shank_right',
-                'sensor_id': 5,
-                'quat_cols': ['R_SHANK_IMU_QuatW', 'R_SHANK_IMU_QuatX', 'R_SHANK_IMU_QuatY', 'R_SHANK_IMU_QuatZ'],
-                'acc_cols': ['R_SHANK_IMU_AccX', 'R_SHANK_IMU_AccY', 'R_SHANK_IMU_AccZ'],
-                'gyr_cols': ['R_SHANK_IMU_GyrX', 'R_SHANK_IMU_GyrY', 'R_SHANK_IMU_GyrZ']
-            },
-            {
-                'location': 'foot_right',
-                'sensor_id': 6,
-                'quat_cols': ['R_FOOT_IMU_QuatW', 'R_FOOT_IMU_QuatX', 'R_FOOT_IMU_QuatY', 'R_FOOT_IMU_QuatZ'],
-                'acc_cols': ['R_FOOT_IMU_AccX', 'R_FOOT_IMU_AccY', 'R_FOOT_IMU_AccZ'],
-                'gyr_cols': ['R_FOOT_IMU_GyrX', 'R_FOOT_IMU_GyrY', 'R_FOOT_IMU_GyrZ']
-            }
-        ]
+        current_mode = app_settings.mode.mode_type
+        if current_mode == 'Upper-body':
+            sensor_configs = [
+                {
+                    'location': 'head',
+                    'sensor_id': 0,
+                    'quat_cols': ['HeadIMU_QuatW', 'HeadIMU_QuatX', 'HeadIMU_QuatY', 'HeadIMU_QuatZ'],
+                    'acc_cols': ['HeadIMU_LocalAccX', 'HeadIMU_LocalAccY', 'HeadIMU_LocalAccZ'],
+                    'gyr_cols': ['HeadIMU_LocalGyrX', 'HeadIMU_LocalGyrY', 'HeadIMU_LocalGyrZ']
+                },
+                {
+                    'location': 'pelvis',
+                    'sensor_id': 1,
+                    'quat_cols': ['Pelvis_IMU_QuatW', 'Pelvis_IMU_QuatX', 'Pelvis_IMU_QuatY', 'Pelvis_IMU_QuatZ'],
+                    'acc_cols': ['Pelvis_IMU_AccX', 'Pelvis_IMU_AccY', 'Pelvis_IMU_AccZ'],
+                    'gyr_cols': ['Pelvis_IMU_GyrX', 'Pelvis_IMU_GyrY', 'Pelvis_IMU_GyrZ']
+                },
+                {
+                    'location': 'upperarm_left',
+                    'sensor_id': 2,
+                    'quat_cols': ['L_Upperarm_IMU_QuatW', 'L_Upperarm_IMU_QuatX', 'L_Upperarm_IMU_QuatY', 'L_Upperarm_IMU_QuatZ'],
+                    'acc_cols': ['L_Upperarm_IMU_AccX', 'L_Upperarm_IMU_AccY', 'L_Upperarm_IMU_AccZ'],
+                    'gyr_cols': ['L_Upperarm_IMU_GyrX', 'L_Upperarm_IMU_GyrY', 'L_Upperarm_IMU_GyrZ']
+                },
+                {
+                    'location': 'lowerarm_left',
+                    'sensor_id': 3,
+                    'quat_cols': ['L_Lowerarm_IMU_QuatW', 'L_Lowerarm_IMU_QuatX', 'L_Lowerarm_IMU_QuatY', 'L_Lowerarm_IMU_QuatZ'],
+                    'acc_cols': ['L_Lowerarm_IMU_AccX', 'L_Lowerarm_IMU_AccY', 'L_Lowerarm_IMU_AccZ'],
+                    'gyr_cols': ['L_Lowerarm_IMU_GyrX', 'L_Lowerarm_IMU_GyrY', 'L_Lowerarm_IMU_GyrZ']
+                },
+                {
+                    'location': 'chest',
+                    'sensor_id': 4,
+                    'quat_cols': ['Chest_IMU_QuatW', 'Chest_IMU_QuatX', 'Chest_IMU_QuatY', 'Chest_IMU_QuatZ'],
+                    'acc_cols': ['Chest_IMU_AccX', 'Chest_IMU_AccY', 'Chest_IMU_AccZ'],
+                    'gyr_cols': ['Chest_IMU_GyrX', 'Chest_IMU_GyrY', 'Chest_IMU_GyrZ']
+                },
+                {
+                    'location': 'upperarm_right',
+                    'sensor_id': 5,
+                    'quat_cols': ['R_Upperarm_IMU_QuatW', 'R_Upperarm_IMU_QuatX', 'R_Upperarm_IMU_QuatY', 'R_Upperarm_IMU_QuatZ'],
+                    'acc_cols': ['R_Upperarm_IMU_AccX', 'R_Upperarm_IMU_AccY', 'R_Upperarm_IMU_AccZ'],
+                    'gyr_cols': ['R_Upperarm_IMU_GyrX', 'R_Upperarm_IMU_GyrY', 'R_Upperarm_IMU_GyrZ']
+                },
+                {
+                    'location': 'lowerarm_right',
+                    'sensor_id': 6,
+                    'quat_cols': ['R_Lowerarm_IMU_QuatW', 'R_Lowerarm_IMU_QuatX', 'R_Lowerarm_IMU_QuatY', 'R_Lowerarm_IMU_QuatZ'],
+                    'acc_cols': ['R_Lowerarm_IMU_AccX', 'R_Lowerarm_IMU_AccY', 'R_Lowerarm_IMU_AccZ'],
+                    'gyr_cols': ['R_Lowerarm_IMU_GyrX', 'R_Lowerarm_IMU_GyrY', 'R_Lowerarm_IMU_GyrZ']
+                }
+            ]
+        else:
+            sensor_configs = [
+                {
+                    'location': 'trunk',
+                    'sensor_id': 0,
+                    'quat_cols': ['TrunkIMU_QuatW', 'TrunkIMU_QuatX', 'TrunkIMU_QuatY', 'TrunkIMU_QuatZ'],
+                    'acc_cols': ['TrunkIMU_LocalAccX', 'TrunkIMU_LocalAccY', 'TrunkIMU_LocalAccZ'],
+                    'gyr_cols': ['TrunkIMU_LocalGyrX', 'TrunkIMU_LocalGyrY', 'TrunkIMU_LocalGyrZ']
+                },
+                {
+                    'location': 'thigh_left',
+                    'sensor_id': 1,
+                    'quat_cols': ['L_THIGH_IMU_QuatW', 'L_THIGH_IMU_QuatX', 'L_THIGH_IMU_QuatY', 'L_THIGH_IMU_QuatZ'],
+                    'acc_cols': ['L_THIGH_IMU_AccX', 'L_THIGH_IMU_AccY', 'L_THIGH_IMU_AccZ'],
+                    'gyr_cols': ['L_THIGH_IMU_GyrX', 'L_THIGH_IMU_GyrY', 'L_THIGH_IMU_GyrZ']
+                },
+                {
+                    'location': 'shank_left',
+                    'sensor_id': 2,
+                    'quat_cols': ['L_SHANK_IMU_QuatW', 'L_SHANK_IMU_QuatX', 'L_SHANK_IMU_QuatY', 'L_SHANK_IMU_QuatZ'],
+                    'acc_cols': ['L_SHANK_IMU_AccX', 'L_SHANK_IMU_AccY', 'L_SHANK_IMU_AccZ'],
+                    'gyr_cols': ['L_SHANK_IMU_GyrX', 'L_SHANK_IMU_GyrY', 'L_SHANK_IMU_GyrZ']
+                },
+                {
+                    'location': 'foot_left',
+                    'sensor_id': 3,
+                    'quat_cols': ['L_FOOT_IMU_QuatW', 'L_FOOT_IMU_QuatX', 'L_FOOT_IMU_QuatY', 'L_FOOT_IMU_QuatZ'],
+                    'acc_cols': ['L_FOOT_IMU_AccX', 'L_FOOT_IMU_AccY', 'L_FOOT_IMU_AccZ'],
+                    'gyr_cols': ['L_FOOT_IMU_GyrX', 'L_FOOT_IMU_GyrY', 'L_FOOT_IMU_GyrZ']
+                },
+                {
+                    'location': 'thigh_right',
+                    'sensor_id': 4,
+                    'quat_cols': ['R_THIGH_IMU_QuatW', 'R_THIGH_IMU_QuatX', 'R_THIGH_IMU_QuatY', 'R_THIGH_IMU_QuatZ'],
+                    'acc_cols': ['R_THIGH_IMU_AccX', 'R_THIGH_IMU_AccY', 'R_THIGH_IMU_AccZ'],
+                    'gyr_cols': ['R_THIGH_IMU_GyrX', 'R_THIGH_IMU_GyrY', 'R_THIGH_IMU_GyrZ']
+                },
+                {
+                    'location': 'shank_right',
+                    'sensor_id': 5,
+                    'quat_cols': ['R_SHANK_IMU_QuatW', 'R_SHANK_IMU_QuatX', 'R_SHANK_IMU_QuatY', 'R_SHANK_IMU_QuatZ'],
+                    'acc_cols': ['R_SHANK_IMU_AccX', 'R_SHANK_IMU_AccY', 'R_SHANK_IMU_AccZ'],
+                    'gyr_cols': ['R_SHANK_IMU_GyrX', 'R_SHANK_IMU_GyrY', 'R_SHANK_IMU_GyrZ']
+                },
+                {
+                    'location': 'foot_right',
+                    'sensor_id': 6,
+                    'quat_cols': ['R_FOOT_IMU_QuatW', 'R_FOOT_IMU_QuatX', 'R_FOOT_IMU_QuatY', 'R_FOOT_IMU_QuatZ'],
+                    'acc_cols': ['R_FOOT_IMU_AccX', 'R_FOOT_IMU_AccY', 'R_FOOT_IMU_AccZ'],
+                    'gyr_cols': ['R_FOOT_IMU_GyrX', 'R_FOOT_IMU_GyrY', 'R_FOOT_IMU_GyrZ']
+                }
+            ]
         
         # Parse each sensor
         for config in sensor_configs:

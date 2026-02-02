@@ -372,6 +372,7 @@ class Visualization3D(QWidget):
         - foot:  local -Z (forward, since z-down and foot points forward) → apply q_foot
         """
         positions = {}
+        current_mode = app_settings.mode.mode_type
         
         hip_pos = np.array([0.0, 0.0, 1.0])
         positions['hip'] = hip_pos
@@ -381,14 +382,6 @@ class Visualization3D(QWidget):
                 q = self.current_data.imu_data[segment_name].quaternions[frame_index]
                 return q / np.linalg.norm(q)
             return np.array([1.0, 0.0, 0.0, 0.0])
-        
-        q_trunk = get_quaternion('trunk')
-        q_thigh_r = get_quaternion('thigh_right')
-        q_thigh_l = get_quaternion('thigh_left')
-        q_shank_r = get_quaternion('shank_right')
-        q_shank_l = get_quaternion('shank_left')
-        q_foot_r = get_quaternion('foot_right')
-        q_foot_l = get_quaternion('foot_left')
         
         def rotate_vector(v: np.ndarray, q: np.ndarray) -> np.ndarray:
             """Apply quaternion rotation to a vector."""
@@ -400,69 +393,140 @@ class Visualization3D(QWidget):
             ])
             return R @ v
         
-        # ============================================================
-        # Segment direction vectors in IMU LOCAL coordinates
-        # These represent the segment's longitudinal axis in sensor frame
-        # ============================================================
-        
-        # trunk: IMU x-axis points UP along trunk → local +X is segment direction
-        trunk_local_dir = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
-        
-        # thigh/shank: IMU x-axis points UP, but leg points DOWN → local -X is segment direction
-        thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
-        shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
-        
-        # foot: IMU z-axis points DOWN, foot points FORWARD → local -Z is segment direction
-        # (Actually, if IMU x=backward, z=down, then forward is -X)
-        foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
-        
-        # Hip offsets in trunk's local frame (y-right means -Y is left)
-        # trunk: y-right, so right hip offset is local -Y, left hip offset is local +Y
-        rhip_local_offset = np.array([0.0, -0.15, 0.0])
-        lhip_local_offset = np.array([0.0, 0.15, 0.0])
-        
-        # ============================================================
-        # Forward Kinematics: rotate local directions to global frame
-        # ============================================================
-        
-        # Trunk
-        trunk_dir = rotate_vector(trunk_local_dir, q_trunk)
-        trunk_top = hip_pos + trunk_dir
-        positions['trunk_top'] = trunk_top
-        
-        # Hip joints (offset from pelvis center using trunk orientation)
-        rhip_offset = rotate_vector(rhip_local_offset, q_trunk)
-        lhip_offset = rotate_vector(lhip_local_offset, q_trunk)
-        rhip_pos = hip_pos + rhip_offset
-        lhip_pos = hip_pos + lhip_offset
-        positions['rhip'] = rhip_pos
-        positions['lhip'] = lhip_pos
-        
-        # Right leg chain
-        thigh_r_dir = rotate_vector(thigh_local_dir, q_thigh_r)
-        knee_r_pos = rhip_pos + thigh_r_dir
-        positions['knee_right'] = knee_r_pos
-        
-        shank_r_dir = rotate_vector(shank_local_dir, q_shank_r)
-        ankle_r_pos = knee_r_pos + shank_r_dir
-        positions['ankle_right'] = ankle_r_pos
-        
-        foot_r_dir = rotate_vector(foot_local_dir, q_foot_r)
-        toe_r_pos = ankle_r_pos + foot_r_dir
-        positions['toe_right'] = toe_r_pos
-        
-        # Left leg chain
-        thigh_l_dir = rotate_vector(thigh_local_dir, q_thigh_l)
-        knee_l_pos = lhip_pos + thigh_l_dir
-        positions['knee_left'] = knee_l_pos
-        
-        shank_l_dir = rotate_vector(shank_local_dir, q_shank_l)
-        ankle_l_pos = knee_l_pos + shank_l_dir
-        positions['ankle_left'] = ankle_l_pos
-        
-        foot_l_dir = rotate_vector(foot_local_dir, q_foot_l)
-        toe_l_pos = ankle_l_pos + foot_l_dir
-        positions['toe_left'] = toe_l_pos
+        if current_mode == 'Upper-body':
+            
+            q_pelvis = get_quaternion('pelvis')
+            q_chest = get_quaternion('chest')
+            q_upperarm_r = get_quaternion('upperarm_right')
+            q_upperarm_l = get_quaternion('upperarm_left')
+            q_lowerarm_r = get_quaternion('lowerarm_right')
+            q_lowerarm_l = get_quaternion('lowerarm_left')
+            
+            # ============================================================
+            # Segment direction vectors in IMU LOCAL coordinates
+            # These represent the segment's longitudinal axis in sensor frame
+            # ============================================================
+            
+            # spine: IMU x-axis points DOWN along spine → local -X is segment direction
+            spine_local_dir = np.array([-self.SEGMENT_LENGTHS['spine'], 0.0, 0.0])
+            
+            # upperarm/lowerarm: IMU x-axis points UP, but arm points DOWN → local -X is segment direction
+            upperarm_local_dir = np.array([-self.SEGMENT_LENGTHS['upperarm'], 0.0, 0.0])
+            lowerarm_local_dir = np.array([-self.SEGMENT_LENGTHS['lowerarm'], 0.0, 0.0])
+            
+            # Shoulder offsets in spine's local frame (y-right means -Y is left)
+            # spine: y-right, so right shoulder offset is local -Y, left shoulder offset is local +Y
+            rshoulder_local_offset = np.array([0.0, -0.15, 0.0])
+            lshoulder_local_offset = np.array([0.0, 0.15, 0.0])
+            
+            # ============================================================
+            # Forward Kinematics: rotate local directions to global frame
+            # ============================================================
+
+            # Spine
+            spine_dir = rotate_vector(spine_local_dir, q_pelvis)
+            chest_pos = hip_pos + spine_dir
+            positions['chest'] = chest_pos
+
+            # Shoulders (offset from chest using chest orientation)
+            rshoulder_offset = rotate_vector(rshoulder_local_offset, q_chest)
+            lshoulder_offset = rotate_vector(lshoulder_local_offset, q_chest)
+            rshoulder_pos = chest_pos + rshoulder_offset
+            lshoulder_pos = chest_pos + lshoulder_offset
+            positions['rshoulder'] = rshoulder_pos
+            positions['lshoulder'] = lshoulder_pos
+
+            # Right arm chain
+            upperarm_r_dir = rotate_vector(upperarm_local_dir, q_upperarm_r)
+            elbow_r_pos = rshoulder_pos + upperarm_r_dir
+            positions['elbow_right'] = elbow_r_pos
+            
+            lowerarm_r_dir = rotate_vector(lowerarm_local_dir, q_lowerarm_r)
+            wrist_r_pos = elbow_r_pos + lowerarm_r_dir
+            positions['wrist_right'] = wrist_r_pos
+            
+            # Left arm chain
+            upperarm_l_dir = rotate_vector(upperarm_local_dir, q_upperarm_l)
+            elbow_l_pos = lshoulder_pos + upperarm_l_dir
+            positions['elbow_left'] = elbow_l_pos
+            
+            lowerarm_l_dir = rotate_vector(lowerarm_local_dir, q_lowerarm_l)
+            wrist_l_pos = elbow_l_pos + lowerarm_l_dir
+            positions['wrist_left'] = wrist_l_pos
+
+        else:
+            q_trunk = get_quaternion('trunk')
+            q_thigh_r = get_quaternion('thigh_right')
+            q_thigh_l = get_quaternion('thigh_left')
+            q_shank_r = get_quaternion('shank_right')
+            q_shank_l = get_quaternion('shank_left')
+            q_foot_r = get_quaternion('foot_right')
+            q_foot_l = get_quaternion('foot_left')
+            
+            
+            # ============================================================
+            # Segment direction vectors in IMU LOCAL coordinates
+            # These represent the segment's longitudinal axis in sensor frame
+            # ============================================================
+            
+            # trunk: IMU x-axis points UP along trunk → local +X is segment direction
+            trunk_local_dir = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
+            
+            # thigh/shank: IMU x-axis points UP, but leg points DOWN → local -X is segment direction
+            thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
+            shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
+            
+            # foot: IMU z-axis points DOWN, foot points FORWARD → local -Z is segment direction
+            # (Actually, if IMU x=backward, z=down, then forward is -X)
+            foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
+            
+            # Hip offsets in trunk's local frame (y-right means -Y is left)
+            # trunk: y-right, so right hip offset is local -Y, left hip offset is local +Y
+            rhip_local_offset = np.array([0.0, -0.15, 0.0])
+            lhip_local_offset = np.array([0.0, 0.15, 0.0])
+            
+            # ============================================================
+            # Forward Kinematics: rotate local directions to global frame
+            # ============================================================
+            
+            # Trunk
+            trunk_dir = rotate_vector(trunk_local_dir, q_trunk)
+            trunk_top = hip_pos + trunk_dir
+            positions['trunk_top'] = trunk_top
+            
+            # Hip joints (offset from pelvis center using trunk orientation)
+            rhip_offset = rotate_vector(rhip_local_offset, q_trunk)
+            lhip_offset = rotate_vector(lhip_local_offset, q_trunk)
+            rhip_pos = hip_pos + rhip_offset
+            lhip_pos = hip_pos + lhip_offset
+            positions['rhip'] = rhip_pos
+            positions['lhip'] = lhip_pos
+            
+            # Right leg chain
+            thigh_r_dir = rotate_vector(thigh_local_dir, q_thigh_r)
+            knee_r_pos = rhip_pos + thigh_r_dir
+            positions['knee_right'] = knee_r_pos
+            
+            shank_r_dir = rotate_vector(shank_local_dir, q_shank_r)
+            ankle_r_pos = knee_r_pos + shank_r_dir
+            positions['ankle_right'] = ankle_r_pos
+            
+            foot_r_dir = rotate_vector(foot_local_dir, q_foot_r)
+            toe_r_pos = ankle_r_pos + foot_r_dir
+            positions['toe_right'] = toe_r_pos
+            
+            # Left leg chain
+            thigh_l_dir = rotate_vector(thigh_local_dir, q_thigh_l)
+            knee_l_pos = lhip_pos + thigh_l_dir
+            positions['knee_left'] = knee_l_pos
+            
+            shank_l_dir = rotate_vector(shank_local_dir, q_shank_l)
+            ankle_l_pos = knee_l_pos + shank_l_dir
+            positions['ankle_left'] = ankle_l_pos
+            
+            foot_l_dir = rotate_vector(foot_local_dir, q_foot_l)
+            toe_l_pos = ankle_l_pos + foot_l_dir
+            positions['toe_left'] = toe_l_pos
         
         return positions
         
@@ -471,17 +535,29 @@ class Visualization3D(QWidget):
         if not PYQTGRAPH_AVAILABLE:
             return
         
-        # Update segment lines
-        segments_to_draw = [
-            ('trunk', positions['hip'], positions['trunk_top']),
-            ('pelvis', positions['lhip'], positions['rhip']),  # Pelvis connects left and right hip
-            ('thigh_right', positions['rhip'], positions['knee_right']),
-            ('thigh_left', positions['lhip'], positions['knee_left']),
-            ('shank_right', positions['knee_right'], positions['ankle_right']),
-            ('shank_left', positions['knee_left'], positions['ankle_left']),
-            ('foot_right', positions['ankle_right'], positions['toe_right']),
-            ('foot_left', positions['ankle_left'], positions['toe_left']),
-        ]
+        current_mode = app_settings.mode.mode_type
+        if current_mode == 'Upper-body':
+            # Update segment lines
+            segments_to_draw = [
+                ('spine', positions['hip'], positions['chest']),
+                ('shoulder', positions['rshoulder'], positions['lshoulder']),  # Shoulder connects left and right shoulder
+                ('upperarm_right', positions['rshoulder'], positions['elbow_right']),
+                ('upperarm_left', positions['lshoulder'], positions['elbow_left']),
+                ('lowerarm_right', positions['elbow_right'], positions['wrist_right']),
+                ('lowerarm_left', positions['elbow_left'], positions['wrist_left']),
+            ]
+        else:
+            # Update segment lines
+            segments_to_draw = [
+                ('trunk', positions['hip'], positions['trunk_top']),
+                ('pelvis', positions['lhip'], positions['rhip']),  # Pelvis connects left and right hip
+                ('thigh_right', positions['rhip'], positions['knee_right']),
+                ('thigh_left', positions['lhip'], positions['knee_left']),
+                ('shank_right', positions['knee_right'], positions['ankle_right']),
+                ('shank_left', positions['knee_left'], positions['ankle_left']),
+                ('foot_right', positions['ankle_right'], positions['toe_right']),
+                ('foot_left', positions['ankle_left'], positions['toe_left']),
+            ]
         
         for segment_name, start_pos, end_pos in segments_to_draw:
             if segment_name in self.skeleton_items:
@@ -522,16 +598,26 @@ class Visualization3D(QWidget):
         axis_y_npose = np.array([0, axis_length, 0])
         axis_z_npose = np.array([0, 0, axis_length])
         
+        current_mode = app_settings.mode.mode_type
         # Define segment center positions and their quaternions
-        segment_configs = [
-            ('trunk', (positions['hip'] + positions['trunk_top']) / 2),
-            ('thigh_right', (positions['rhip'] + positions['knee_right']) / 2),
-            ('thigh_left', (positions['lhip'] + positions['knee_left']) / 2),
-            ('shank_right', (positions['knee_right'] + positions['ankle_right']) / 2),
-            ('shank_left', (positions['knee_left'] + positions['ankle_left']) / 2),
-            ('foot_right', (positions['ankle_right'] + positions['toe_right']) / 2),
-            ('foot_left', (positions['ankle_left'] + positions['toe_left']) / 2),
-        ]
+        if current_mode == 'Upper-body':
+            segment_configs = [
+                ('spine', (positions['hip'] + positions['chest']) / 2),
+                ('upperarm_right', (positions['rshoulder'] + positions['elbow_right']) / 2),
+                ('upperarm_left', (positions['lshoulder'] + positions['elbow_left']) / 2),
+                ('lowerarm_right', (positions['elbow_right'] + positions['wrist_right']) / 2),
+                ('lowerarm_left', (positions['elbow_left'] + positions['wrist_left']) / 2),
+            ]
+        else:
+            segment_configs = [
+                ('trunk', (positions['hip'] + positions['trunk_top']) / 2),
+                ('thigh_right', (positions['rhip'] + positions['knee_right']) / 2),
+                ('thigh_left', (positions['lhip'] + positions['knee_left']) / 2),
+                ('shank_right', (positions['knee_right'] + positions['ankle_right']) / 2),
+                ('shank_left', (positions['knee_left'] + positions['ankle_left']) / 2),
+                ('foot_right', (positions['ankle_right'] + positions['toe_right']) / 2),
+                ('foot_left', (positions['ankle_left'] + positions['toe_left']) / 2),
+            ]   
         
         for segment_name, center_pos in segment_configs:
             if segment_name not in self.axis_items:
