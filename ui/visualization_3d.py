@@ -38,7 +38,9 @@ class Visualization3D(QWidget):
         'shank': 0.42,     # Knee to ankle
         'foot': 0.25,      # Ankle to toe
         # Upper body segments can be added similarly
-        'spine': 0.50,     # Pelvis to chest
+        'abdomen': 0.25,     # Pelvis to chest
+        'chest': 0.20,       # Chest to head
+        'head': 0.20,        # Head height
         'upperarm': 0.25,  # Shoulder to elbow
         'lowerarm': 0.25   # Elbow to wrist
     }
@@ -234,15 +236,17 @@ class Visualization3D(QWidget):
         current_mode = app_settings.mode.mode_type
         if current_mode == 'Upper-body':
             segments = {
-                'spine': (1.0, 1.0, 1.0, 1.0),        # White
-                'shoulder': (0.8, 0.8, 0.8, 1.0),     # Gray (connects left and right shoulder)
+                'abdomen': (1.0, 1.0, 1.0, 1.0),        # White
+                'chest': (0.8, 0.8, 0.8, 1.0),          # Gray
+                'head': (0.6, 0.6, 0.6, 1.0),           # Light Gray
+                'shoulder': (1.0, 1.0, 0.0, 1.0),       # Yellow (connects left and right shoulder)
                 'upperarm_right': (1.0, 0.3, 0.3, 1.0),  # Red
                 'upperarm_left': (0.3, 0.3, 1.0, 1.0),   # Blue
                 'lowerarm_right': (1.0, 0.5, 0.5, 1.0),  # Light red
                 'lowerarm_left': (0.5, 0.5, 1.0, 1.0),   # Light blue
             }
-            joint_names = ['shoulder', 'rshoulder', 'lshoulder', 'elbow_right', 'elbow_left', 'wrist_right', 'wrist_left']
-            segment_names = ['spine', 'upperarm_right', 'upperarm_left', 'lowerarm_right', 'lowerarm_left']
+            joint_names = ['hip', 'spine', 'neck', 'rshoulder', 'lshoulder', 'elbow_right', 'elbow_left', 'wrist_right', 'wrist_left']
+            segment_names = ['pelvis', 'chest', 'head', 'upperarm_right', 'upperarm_left', 'lowerarm_right', 'lowerarm_left']
         else:
             # Define segments and their colors
             segments = {
@@ -397,6 +401,7 @@ class Visualization3D(QWidget):
             
             q_pelvis = get_quaternion('pelvis')
             q_chest = get_quaternion('chest')
+            q_head = get_quaternion('head')
             q_upperarm_r = get_quaternion('upperarm_right')
             q_upperarm_l = get_quaternion('upperarm_left')
             q_lowerarm_r = get_quaternion('lowerarm_right')
@@ -407,17 +412,19 @@ class Visualization3D(QWidget):
             # These represent the segment's longitudinal axis in sensor frame
             # ============================================================
             
-            # spine: IMU x-axis points DOWN along spine → local -X is segment direction
-            spine_local_dir = np.array([-self.SEGMENT_LENGTHS['spine'], 0.0, 0.0])
+            # trunk: IMU x-axis points UP along trunk → local +X is segment direction
+            abdomen_local_dir = np.array([self.SEGMENT_LENGTHS['abdomen'], 0.0, 0.0])
+            chest_local_dir = np.array([self.SEGMENT_LENGTHS['chest'], 0.0, 0.0])
+            head_local_dir = np.array([self.SEGMENT_LENGTHS['head'], 0.0, 0.0])
             
             # upperarm/lowerarm: IMU x-axis points UP, but arm points DOWN → local -X is segment direction
-            upperarm_r_local_dir = np.array([0.0, self.SEGMENT_LENGTHS['upperarm'], 0.0])
-            upperarm_l_local_dir = np.array([0.0, -self.SEGMENT_LENGTHS['upperarm'], 0.0])
-            lowerarm_r_local_dir = np.array([0.0, self.SEGMENT_LENGTHS['lowerarm'], 0.0])
-            lowerarm_l_local_dir = np.array([0.0, -self.SEGMENT_LENGTHS['lowerarm'], 0.0])
+            upperarm_r_local_dir = np.array([-self.SEGMENT_LENGTHS['upperarm'], 0.0, 0.0])
+            upperarm_l_local_dir = np.array([-self.SEGMENT_LENGTHS['upperarm'], 0.0, 0.0])
+            lowerarm_r_local_dir = np.array([-self.SEGMENT_LENGTHS['lowerarm'], 0.0, 0.0])
+            lowerarm_l_local_dir = np.array([-self.SEGMENT_LENGTHS['lowerarm'], 0.0, 0.0])
             
-            # Shoulder offsets in spine's local frame (y-right means -Y is left)
-            # spine: y-right, so right shoulder offset is local -Y, left shoulder offset is local +Y
+            # Shoulder offsets in chest's local frame (y-right means -Y is left)
+            # chest: y-right, so right shoulder offset is local -Y, left shoulder offset is local +Y
             rshoulder_local_offset = np.array([0.0, 0.15, 0.0])
             lshoulder_local_offset = np.array([0.0, -0.15, 0.0])
             
@@ -425,16 +432,26 @@ class Visualization3D(QWidget):
             # Forward Kinematics: rotate local directions to global frame
             # ============================================================
 
-            # Spine
-            spine_dir = rotate_vector(spine_local_dir, q_pelvis)
-            chest_pos = hip_pos + spine_dir
-            positions['chest'] = chest_pos
+            # Abdomen (pelvis to chest)
+            abdomen_dir = rotate_vector(abdomen_local_dir, q_pelvis)
+            spine_pos = hip_pos + abdomen_dir
+            positions['spine'] = spine_pos
+
+            # Chest
+            chest_dir = rotate_vector(chest_local_dir, q_chest)
+            neck_pos = spine_pos + chest_dir
+            positions['neck'] = neck_pos
+
+            # Head (head height)
+            head_dir = rotate_vector(head_local_dir, q_head)
+            head_top = neck_pos + head_dir
+            positions['head'] = head_top
 
             # Shoulders (offset from chest using chest orientation)
             rshoulder_offset = rotate_vector(rshoulder_local_offset, q_chest)
             lshoulder_offset = rotate_vector(lshoulder_local_offset, q_chest)
-            rshoulder_pos = chest_pos + rshoulder_offset
-            lshoulder_pos = chest_pos + lshoulder_offset
+            rshoulder_pos = neck_pos + rshoulder_offset
+            lshoulder_pos = neck_pos + lshoulder_offset
             positions['rshoulder'] = rshoulder_pos
             positions['lshoulder'] = lshoulder_pos
 
@@ -541,7 +558,9 @@ class Visualization3D(QWidget):
         if current_mode == 'Upper-body':
             # Update segment lines
             segments_to_draw = [
-                ('spine', positions['hip'], positions['chest']),
+                ('abdomen', positions['hip'], positions['spine']),
+                ('chest', positions['spine'], positions['neck']),
+                ('head', positions['neck'], positions['head']),
                 ('shoulder', positions['rshoulder'], positions['lshoulder']),  # Shoulder connects left and right shoulder
                 ('upperarm_right', positions['rshoulder'], positions['elbow_right']),
                 ('upperarm_left', positions['lshoulder'], positions['elbow_left']),
@@ -604,7 +623,9 @@ class Visualization3D(QWidget):
         # Define segment center positions and their quaternions
         if current_mode == 'Upper-body':
             segment_configs = [
-                ('spine', (positions['hip'] + positions['chest']) / 2),
+                ('pelvis', (positions['hip'] + positions['spine']) / 2),
+                ('chest', (positions['spine'] + positions['neck']) / 2),
+                ('head', (positions['neck'] + positions['head']) / 2),
                 ('upperarm_right', (positions['rshoulder'] + positions['elbow_right']) / 2),
                 ('upperarm_left', (positions['lshoulder'] + positions['elbow_left']) / 2),
                 ('lowerarm_right', (positions['elbow_right'] + positions['wrist_right']) / 2),

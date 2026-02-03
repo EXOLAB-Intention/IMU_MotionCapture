@@ -92,40 +92,34 @@ class CalibrationProcessor:
         desired = {}
 
         if mode == "Upper-body":
-            R_body = np.array([
-                [0, 0, -1],
-                [0, -1, 0],
-                [-1, 0, 0]
-            ]).T
-            q_body = rotmat_to_quat(R_body)
             desired.update({
-                'pelvis': q_body.copy(),
-                'chest': q_body.copy(),
-                'head': q_body.copy()
+                'pelvis': q_trunk.copy(),
+                'chest': q_trunk.copy(),
+                'head': q_trunk.copy()
             })
             if pose_type == "T-pose":
                 # Upper-body T-pose desired quaternions
                 R_arm_right = np.array([
-                    [0, 0, -1],
-                    [0, -1, 0],
-                    [-1, 0, 0]
+                    [0, 1, 0],
+                    [1, 0, 0],
+                    [0, 0, -1]
                 ]).T
                 R_arm_left = np.array([
-                    [0, 0, -1],
                     [0, -1, 0],
-                    [-1, 0, 0]
+                    [-1, 0, 0],
+                    [0, 0, -1]
                 ]).T
             else:
                 # Upper-body N-pose desired quaternions
                 R_arm_right = np.array([
-                    [0, 1, 0],
-                    [0, 0, -1],
-                    [-1, 0, 0]
+                    [0, 0, 1],
+                    [1, 0, 0],
+                    [0, 1, 0]
                 ]).T
                 R_arm_left = np.array([
-                    [0, -1, 0],
                     [0, 0, 1],
-                    [-1, 0, 0]
+                    [-1, 0, 0],
+                    [0, -1, 0]
                 ]).T
                 
             q_arm_right = rotmat_to_quat(R_arm_right)
