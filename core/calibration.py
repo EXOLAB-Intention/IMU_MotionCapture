@@ -501,4 +501,5 @@ class CalibrationProcessor:
         
         calibrated_data.calibration_pose = self.pose_type
         print(f"{self.pose_type} calibration applied successfully!")
+        calibrated_data.is_calibrated = True
         return calibrated_data

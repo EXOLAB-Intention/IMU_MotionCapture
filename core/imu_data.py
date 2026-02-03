@@ -96,14 +96,16 @@ class JointAngles:
     
     # Joint angles in degrees [flexion, abduction, rotation]
     # Lower body joints
-    hip_right: np.ndarray  # (N, 3)
-    hip_left: np.ndarray  # (N, 3)
-    knee_right: np.ndarray  # (N, 3)
-    knee_left: np.ndarray  # (N, 3)
-    ankle_right: np.ndarray  # (N, 3)
-    ankle_left: np.ndarray  # (N, 3)
+    hip_right: Optional[np.ndarray] = None  # (N, 3)
+    hip_left: Optional[np.ndarray] = None  # (N, 3)
+    knee_right: Optional[np.ndarray] = None  # (N, 3)
+    knee_left: Optional[np.ndarray] = None  # (N, 3)
+    ankle_right: Optional[np.ndarray] = None  # (N, 3)
+    ankle_left: Optional[np.ndarray] = None  # (N, 3)
 
     # Upper body joints
+    spine: Optional[np.ndarray] = None  # (N, 3)
+    neck: Optional[np.ndarray] = None  # (N, 3)
     shoulder_right: Optional[np.ndarray] = None  # (N, 3)
     shoulder_left: Optional[np.ndarray] = None  # (N, 3)
     elbow_right: Optional[np.ndarray] = None  # (N, 3)
@@ -111,6 +113,9 @@ class JointAngles:
     
     def get_joint_angle(self, joint: str, side: str) -> np.ndarray:
         """Get specific joint angle time series"""
+        if joint in ['spine', 'neck']:
+            return getattr(self, joint, None)
+        
         attr_name = f"{joint}_{side}"
         return getattr(self, attr_name, None)
 
@@ -156,6 +161,7 @@ class MotionCaptureData:
     calibration_duration: Optional[float] = None
     calibration_start_time: Optional[float] = None
     heading_offset: Optional[np.ndarray] = None  # Trunk heading at N-pose for visualization
+    is_calibrated: bool = False
     
     # Processing status
     is_processed: bool = False

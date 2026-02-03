@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self.main_view.process_requested.connect(self.process_data)
         self.main_view.mode_changed.connect(self.update_mode)
         self.main_view.mode_changed.connect(self.main_view.visualization_3d.refresh_view_mode)
+        self.main_view.mode_changed.connect(self.main_view.graph_view.update_mode_selection)
 
     @pyqtSlot(str)
     def update_mode(self, mode_name: str):
@@ -280,12 +281,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Processing data (using existing calibration)...")
             
             # Apply calibration to data first (if not already applied)
-            calibrated_data = self.data_processor.calibration_processor.apply_to_data(
-                self.current_data
-            )
+            if not self.current_data.is_calibrated:
+                self.current_data = self.data_processor.calibration_processor.apply_to_data(
+                    self.current_data
+                )
             
             # Compute kinematics only (no calibration step)
-            processed_data = self.data_processor.process_kinematics_only(calibrated_data)
+            processed_data = self.data_processor.process_kinematics_only(self.current_data)
             
             self.current_data = processed_data
             
