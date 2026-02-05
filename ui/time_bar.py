@@ -75,6 +75,13 @@ class TimeBar(QWidget):
         
         self.duration_label = QLabel("Duration: 0.000 s")
         
+        # Playback speed controls
+        playback_label = QLabel("Speed:")
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["0.25x", "0.5x", "0.75x", "1x", "1.5x", "2x", "5x"])
+        self.speed_combo.setCurrentText("1x")  # Default to real-time
+        self.speed_combo.currentTextChanged.connect(self._on_speed_changed)
+        
         range_layout.addWidget(range_label)
         range_layout.addWidget(QLabel("Start:"))
         range_layout.addWidget(self.start_spin)
@@ -82,25 +89,13 @@ class TimeBar(QWidget):
         range_layout.addWidget(QLabel("End:"))
         range_layout.addWidget(self.end_spin)
         range_layout.addWidget(self.select_all_btn)
-        range_layout.addStretch()
         range_layout.addWidget(self.duration_label)
+        range_layout.addSpacing(20)
+        range_layout.addWidget(playback_label)
+        range_layout.addWidget(self.speed_combo)
+        range_layout.addStretch()
         
         layout.addLayout(range_layout)
-        
-        # Playback speed
-        playback_layout = QHBoxLayout()
-        
-        playback_label = QLabel("Playback Speed:")
-        self.speed_combo = QComboBox()
-        self.speed_combo.addItems(["0.25x", "0.5x", "0.75x", "1x", "1.5x", "2x", "5x"])
-        self.speed_combo.setCurrentText("1x")  # Default to real-time
-        self.speed_combo.currentTextChanged.connect(self._on_speed_changed)
-        
-        playback_layout.addWidget(playback_label)
-        playback_layout.addWidget(self.speed_combo)
-        playback_layout.addStretch()
-        
-        layout.addLayout(playback_layout)
         
         self.setLayout(layout)
         self.setMaximumHeight(150)

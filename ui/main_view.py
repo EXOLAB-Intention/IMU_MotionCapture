@@ -179,3 +179,7 @@ class MainView(QWidget):
     def get_selected_time_range(self) -> tuple:
         """Get selected time range from time bar"""
         return self.time_bar.get_selected_range()
+    
+    def update_segment_lengths(self, subject_info: dict):
+        """Update segment lengths in 3D visualization based on subject info"""
+        self.visualization_3d.update_segment_lengths(subject_info)

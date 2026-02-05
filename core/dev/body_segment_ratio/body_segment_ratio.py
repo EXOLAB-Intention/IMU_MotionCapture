@@ -15,7 +15,7 @@ class BodySegmentRatioPredictor:
     """
     
     # Class constants
-    FILE_PATH = ".\\8차 인체치수조사(2020~24)_치수데이터(공개용).xlsx"
+    FILE_PATH = "8차 인체치수조사(2020~24)_치수데이터(공개용).xlsx"
     SHEET_NAME = "(1~2차년도) 직접측정"
     
     # Column mapping
@@ -112,21 +112,36 @@ class BodySegmentRatioPredictor:
     @staticmethod
     def _resolve_excel_path(path_value: str) -> str:
         """Resolve Excel file path relative to this script if needed."""
+        # Try as absolute path first
         candidate = Path(path_value)
         if candidate.is_file():
             return str(candidate)
 
+        # Try relative to script directory
         script_dir = Path(__file__).resolve().parent
         candidate = script_dir / path_value
         if candidate.is_file():
             return str(candidate)
 
-        project_root = script_dir.parents[3] if len(script_dir.parents) >= 4 else script_dir
+        # Try relative to project root (3 levels up from core/dev/body_segment_ratio/)
+        project_root = script_dir.parent.parent.parent
         candidate = project_root / path_value
         if candidate.is_file():
             return str(candidate)
+        
+        # Try in core/dev/body_segment_ratio/ directly
+        candidate = script_dir / Path(path_value).name
+        if candidate.is_file():
+            return str(candidate)
 
-        raise FileNotFoundError(f"Excel file not found: {path_value}")
+        raise FileNotFoundError(
+            f"Excel file not found: {path_value}\n"
+            f"Searched in:\n"
+            f"  - {Path(path_value).absolute()}\n"
+            f"  - {script_dir / path_value}\n"
+            f"  - {project_root / path_value}\n"
+            f"  - {script_dir / Path(path_value).name}"
+        )
     
     def _train_models(self):
         """Train linear regression models for each segment ratio."""

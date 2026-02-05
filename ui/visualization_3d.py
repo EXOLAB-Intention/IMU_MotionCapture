@@ -6,6 +6,8 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButt
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt
 import numpy as np
 
+from config.settings import app_settings
+
 try:
     import pyqtgraph as pg
     import pyqtgraph.opengl as gl
@@ -30,14 +32,6 @@ class Visualization3D(QWidget):
     # Signals
     frame_changed = pyqtSignal(int)  # current frame index
     
-    # Segment lengths (meters) - approximate human proportions
-    SEGMENT_LENGTHS = {
-        'trunk': 0.50,     # Torso height
-        'thigh': 0.40,     # Hip to knee
-        'shank': 0.42,     # Knee to ankle
-        'foot': 0.25,      # Ankle to toe
-    }
-    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_data = None
@@ -47,6 +41,17 @@ class Visualization3D(QWidget):
         self._updating = False  # Flag to prevent recursive signal loops
         self.timer = QTimer()
         self.timer.timeout.connect(self._advance_frame)
+        
+        # Segment lengths (meters) - initialized from settings
+        self.SEGMENT_LENGTHS = {
+            'trunk': 0.50,     # Torso height
+            'thigh': 0.40,     # Hip to knee
+            'shank': 0.42,     # Knee to ankle
+            'foot': 0.25,      # Ankle to toe
+        }
+        
+        # Load initial segment lengths from settings
+        self._load_segment_lengths_from_settings()
         
         # Playback state
         self.playback_start_time = 0.0  # Real-time start (seconds)
@@ -139,20 +144,54 @@ class Visualization3D(QWidget):
         
         layout.addLayout(controls_layout)
         
-        # Frame slider for manual scrubbing
-        slider_layout = QHBoxLayout()
-        slider_layout.addWidget(QLabel("Frame:"))
-        
-        self.frame_slider = QSlider(Qt.Horizontal)
-        self.frame_slider.setEnabled(False)
-        self.frame_slider.setMinimum(0)
-        self.frame_slider.setMaximum(0)
-        self.frame_slider.valueChanged.connect(self._on_slider_changed)
-        slider_layout.addWidget(self.frame_slider, stretch=1)
-        
-        layout.addLayout(slider_layout)
-        
         self.setLayout(layout)
+    
+    def _load_segment_lengths_from_settings(self):
+        """Load segment lengths from app settings based on subject height"""
+        try:
+            # Get segment lengths from settings (in cm, converted to m)
+            self.SEGMENT_LENGTHS['trunk'] = app_settings.get_segment_length('trunk') / 100.0
+            self.SEGMENT_LENGTHS['thigh'] = app_settings.get_segment_length('thigh') / 100.0
+            self.SEGMENT_LENGTHS['shank'] = app_settings.get_segment_length('shank') / 100.0
+            self.SEGMENT_LENGTHS['foot'] = app_settings.get_segment_length('foot') / 100.0
+        except Exception as e:
+            # Fallback to default values if settings not available
+            print(f"Warning: Could not load segment lengths from settings: {e}")
+            self.SEGMENT_LENGTHS = {
+                'trunk': 0.50,
+                'thigh': 0.40,
+                'shank': 0.42,
+                'foot': 0.25,
+            }
+    
+    def update_segment_lengths(self, subject_info: dict):
+        """
+        Update segment lengths based on subject information.
+        
+        Args:
+            subject_info: Dictionary containing height and segment ratios
+        """
+        try:
+            height = subject_info.get('height', 170.0)  # cm
+            
+            # Get ratios
+            trunk_ratio = subject_info.get('trunk_ratio', 0.288)
+            thigh_ratio = subject_info.get('thigh_ratio', 0.232)
+            shank_ratio = subject_info.get('shank_ratio', 0.246)
+            foot_ratio = subject_info.get('foot_ratio', 0.152)
+            
+            # Calculate segment lengths (convert cm to m)
+            self.SEGMENT_LENGTHS['trunk'] = (height * trunk_ratio) / 100.0
+            self.SEGMENT_LENGTHS['thigh'] = (height * thigh_ratio) / 100.0
+            self.SEGMENT_LENGTHS['shank'] = (height * shank_ratio) / 100.0
+            self.SEGMENT_LENGTHS['foot'] = (height * foot_ratio) / 100.0
+            
+            # If data is loaded, re-render current frame with new lengths
+            if self.current_data is not None:
+                self._render_frame(self.current_frame)
+                
+        except Exception as e:
+            print(f"Error updating segment lengths: {e}")
     
     def _add_axes(self):
         """Add coordinate axes to the 3D view"""
@@ -200,13 +239,6 @@ class Visualization3D(QWidget):
             first_sensor = next(iter(motion_data.imu_data.values()))
             n_frames = len(first_sensor.timestamps)
             
-            # Update UI elements
-            self.frame_slider.blockSignals(True)
-            self.frame_slider.setMaximum(n_frames - 1)
-            self.frame_slider.setValue(0)
-            self.frame_slider.setEnabled(True)
-            self.frame_slider.blockSignals(False)
-            
             self.frame_label.setText(f"Frame: 0 / {n_frames}")
             self.play_btn.setEnabled(True)
             
@@ -222,7 +254,6 @@ class Visualization3D(QWidget):
                 self._auto_detect_foot_contact(motion_data)
         else:
             self.frame_label.setText("Frame: 0 / 0")
-            self.frame_slider.setEnabled(False)
             self.play_btn.setEnabled(False)
     
     def set_foot_contact(self, gait_start_frame: int, gait_end_frame: int, 
@@ -400,11 +431,6 @@ class Visualization3D(QWidget):
         # Update frame info
         self.frame_label.setText(f"Frame: {frame_index} / {n_frames}")
         
-        # Update slider without triggering valueChanged signal
-        self.frame_slider.blockSignals(True)
-        self.frame_slider.setValue(frame_index)
-        self.frame_slider.blockSignals(False)
-        
         # Calculate joint positions using forward kinematics
         positions = self._calculate_joint_positions(frame_index)
         
@@ -424,19 +450,20 @@ class Visualization3D(QWidget):
         
         Global coordinate system: X=forward, Y=left, Z=up
         
-        IMU attachment directions (sensor local frame):
-        - trunk:       x-up, y-right, z-forward
-        - thigh/shank: x-up, y-left,  z-backward
-        - foot:        x-backward, y-left, z-down
+        UNIFIED IMU attachment directions (sensor local frame):
+        All segments now use the same coordinate system after calibration:
+        - trunk:       x-up, y-left, z-backward
+        - thigh/shank: x-up, y-left, z-backward
+        - foot:        x-up, y-left, z-backward
         
-        After N-pose calibration with qD=[1,0,0,0], the calibrated quaternion
+        After N-pose calibration with unified q_desired, the calibrated quaternion
         represents the rotation FROM sensor's local frame TO global frame.
         
         So to get segment direction in global frame:
         - trunk: local +X (up) → apply q_trunk
         - thigh: local -X (down, since x-up and leg goes down) → apply q_thigh
         - shank: local -X (down) → apply q_shank
-        - foot:  local -Z (forward, since z-down and foot points forward) → apply q_foot
+        - foot:  local -X (down to forward, following leg direction) → apply q_foot
         """
         positions = {}
         
@@ -470,6 +497,7 @@ class Visualization3D(QWidget):
         # ============================================================
         # Segment direction vectors in IMU LOCAL coordinates
         # These represent the segment's longitudinal axis in sensor frame
+        # All segments now have UNIFIED coordinate system (x-up, y-left, z-backward)
         # ============================================================
         
         # trunk: IMU x-axis points UP along trunk → local +X is segment direction
@@ -479,12 +507,11 @@ class Visualization3D(QWidget):
         thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
         shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
         
-        # foot: IMU z-axis points DOWN, foot points FORWARD → local -Z is segment direction
-        # (Actually, if IMU x=backward, z=down, then forward is -X)
-        foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
+        # foot: IMU z-axis points BACKWARD, foot points FORWARD → local -Z is segment direction
+        foot_local_dir = np.array([0.0, 0.0, -self.SEGMENT_LENGTHS['foot']])
         
-        # Hip offsets in trunk's local frame (y-right means -Y is left)
-        # trunk: y-right, so right hip offset is local -Y, left hip offset is local +Y
+        # Hip offsets in trunk's local frame
+        # With unified coordinate system: y-left, so right hip is -Y, left hip is +Y
         rhip_local_offset = np.array([0.0, -0.15, 0.0])
         lhip_local_offset = np.array([0.0, 0.15, 0.0])
         
@@ -721,11 +748,6 @@ class Visualization3D(QWidget):
         self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
         self.grid.translate(grid_translate_x, grid_translate_y, self.grid_offset[2])
     
-    def _on_slider_changed(self, value: int):
-        """Handle frame slider changes (manual scrubbing)"""
-        if not self.is_playing:  # Only respond if not playing
-            self._render_frame(value)
-    
     def _toggle_playback(self):
         """Toggle play/pause"""
         if self.is_playing:
@@ -825,9 +847,6 @@ class Visualization3D(QWidget):
         self.current_frame = 0
         self._stop_playback()
         self.frame_label.setText("Frame: 0 / 0")
-        self.frame_slider.setEnabled(False)
-        self.frame_slider.setValue(0)
-        self.frame_slider.setMaximum(0)
         self.play_btn.setEnabled(False)
         
         # Remove skeleton items
