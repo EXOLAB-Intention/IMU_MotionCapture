@@ -78,3 +78,8 @@ env/
 
 # Ignore compiled Python cache files in subdirectories
 **/__pycache__/
+
+# Ignore custom extension files from this system
+*.mcp
+*.cal
+*.subject
