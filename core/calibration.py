@@ -208,15 +208,16 @@ class CalibrationProcessor:
             q_calib = self._average_quaternions(calib_quats_norm)
             self.calib_quaternions[location] = q_calib.copy()
 
-        # Determine walking direction from trunk local +Z (global ±X)
+        # Determine walking direction from trunk local +Z (project to global XY)
         walking_dir = np.array([1.0, 0.0, 0.0])
         if 'trunk' in self.calib_quaternions:
             q_trunk = self.calib_quaternions['trunk']
             R_trunk = KinematicsProcessor.quaternion_to_rotation_matrix(q_trunk)
             trunk_local_z = np.array([0.0, 0.0, 1.0])
             trunk_z_global = R_trunk @ trunk_local_z
-            if np.dot(trunk_z_global, np.array([1.0, 0.0, 0.0])) < 0:
-                walking_dir = np.array([-1.0, 0.0, 0.0])
+            trunk_z_proj = np.array([trunk_z_global[0], trunk_z_global[1], 0.0])
+            if np.linalg.norm(trunk_z_proj) >= 1e-6:
+                walking_dir = trunk_z_proj / np.linalg.norm(trunk_z_proj)
 
         # Get desired quaternions for each segment based on walking direction
         desired_quats = self._get_desired_quaternions(walking_dir)
