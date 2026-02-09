@@ -218,7 +218,7 @@ class KinematicsProcessor:
                 - foot_contact_left: Modified boolean array (no simultaneous contact/non-contact)
         """
         if self.current_mode == 'Upper-body':
-            return None, None  # No foot contact detection in upper-body mode
+            return (None, None, None, None)  # No foot contact detection in upper-body mode
         
         # Extract foot IMU data from MotionCaptureData
         # Expected structure: data.imu_data['foot_right'] and data.imu_data['foot_left']

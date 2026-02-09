@@ -26,6 +26,11 @@ class BodySegmentRatioPredictor:
     KNEE_COL = "014. 무릎높이 "
     ANKLE_COL = "015. 가쪽복사높이 "
     FOOT_COL = "122. 발직선길이 "
+    CHEST_COL = "066. 목뒤등뼈위겨드랑수준길이"
+    BACK_COL = "067. 등길이"
+    UPPERARM_COL = "075. 위팔길이"
+    LOWERARM_COL = "095. 아래팔수평길이(팔굽힌)"
+    HEAD_COL = "107. 머리수직길이"
     
     def __init__(self, file_path: str = None):
         """
@@ -65,10 +70,17 @@ class BodySegmentRatioPredictor:
         knee_col = self.KNEE_COL.strip()
         ankle_col = self.ANKLE_COL.strip()
         foot_col = self.FOOT_COL.strip()
+        chest_col = self.CHEST_COL.strip()
+        back_col = self.BACK_COL.strip()
+        upperarm_col = self.UPPERARM_COL.strip()
+        lowerarm_col = self.LOWERARM_COL.strip()
+        head_col = self.HEAD_COL.strip()
 
         use_cols = [
             height_col, shoulder_col, waist_col, hip_col,
-            knee_col, ankle_col, foot_col
+            knee_col, ankle_col, foot_col,
+            chest_col, back_col,
+            upperarm_col, lowerarm_col, head_col
         ]
         missing = [c for c in use_cols if c not in df_raw.columns]
         if missing:
@@ -90,13 +102,19 @@ class BodySegmentRatioPredictor:
         df["thigh_len"] = df[hip_col] - df[knee_col]
         df["shank_len"] = df[knee_col] - df[ankle_col]
         df["foot_len"] = df[foot_col]
+        df["chest_len"] = df[chest_col]
+        df["abdomen_len"] = df[back_col] - df[chest_col]
+        df["upperarm_len"] = df[upperarm_col]
+        df["lowerarm_len"] = df[lowerarm_col]
+        df["head_len"] = df[head_col]
         
         # Remove outliers where length is negative or zero
         df = df[
             (df["trunk_len"] > 0) &
             (df["thigh_len"] > 0) &
             (df["shank_len"] > 0) &
-            (df[height_col] > 0)
+            (df[height_col] > 0) &
+            (df["abdomen_len"] > 0)
         ].copy()
         
         # ========================================
@@ -106,7 +124,12 @@ class BodySegmentRatioPredictor:
         df["thigh_ratio"] = df["thigh_len"] / df[height_col]
         df["shank_ratio"] = df["shank_len"] / df[height_col]
         df["foot_ratio"] = df["foot_len"] / df[height_col]
-        
+        df["chest_ratio"] = df["chest_len"] / df[height_col]
+        df["abdomen_ratio"] = df["abdomen_len"] / df[height_col]
+        df["upperarm_ratio"] = df["upperarm_len"] / df[height_col]
+        df["lowerarm_ratio"] = df["lowerarm_len"] / df[height_col]
+        df["head_ratio"] = df["head_len"] / df[height_col]
+
         self.df = df
 
     @staticmethod
@@ -154,7 +177,8 @@ class BodySegmentRatioPredictor:
         # 5. Train linear regression models for each segment ratio
         #    (height, foot_length) -> each ratio
         # ========================================
-        targets = ["trunk_ratio", "thigh_ratio", "shank_ratio", "foot_ratio"]
+        targets = ["trunk_ratio", "thigh_ratio", "shank_ratio", "foot_ratio",
+                   "chest_ratio", "abdomen_ratio", "upperarm_ratio", "lowerarm_ratio", "head_ratio"]
         
         for t in targets:
             model = LinearRegression()
@@ -190,6 +214,11 @@ class BodySegmentRatioPredictor:
             "thigh_ratio": round(float(self.models["thigh_ratio"].predict(X_input)[0]), 3),
             "shank_ratio": round(float(self.models["shank_ratio"].predict(X_input)[0]), 3),
             "foot_ratio": round(float(self.models["foot_ratio"].predict(X_input)[0]), 3),
+            "chest_ratio": round(float(self.models["chest_ratio"].predict(X_input)[0]), 3),
+            "abdomen_ratio": round(float(self.models["abdomen_ratio"].predict(X_input)[0]), 3),
+            "upperarm_ratio": round(float(self.models["upperarm_ratio"].predict(X_input)[0]), 3),
+            "lowerarm_ratio": round(float(self.models["lowerarm_ratio"].predict(X_input)[0]), 3),
+            "head_ratio": round(float(self.models["head_ratio"].predict(X_input)[0]), 3),
         }
     
     def predict_segment_lengths(self, height: float, foot_length: float) -> Dict[str, float]:
@@ -214,6 +243,11 @@ class BodySegmentRatioPredictor:
             "thigh_len_mm": round(height * ratios["thigh_ratio"], 1),
             "shank_len_mm": round(height * ratios["shank_ratio"], 1),
             "foot_len_mm": round(height * ratios["foot_ratio"], 1),
+            "chest_len_mm": round(height * ratios["chest_ratio"], 1),
+            "abdomen_len_mm": round(height * ratios["abdomen_ratio"], 1),
+            "upperarm_len_mm": round(height * ratios["upperarm_ratio"], 1),
+            "lowerarm_len_mm": round(height * ratios["lowerarm_ratio"], 1),
+            "head_len_mm": round(height * ratios["head_ratio"], 1),
             **ratios,
         }
 

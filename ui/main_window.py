@@ -136,6 +136,7 @@ class MainWindow(QMainWindow):
         self.main_view.mode_changed.connect(self.update_mode)
         self.main_view.mode_changed.connect(self.main_view.visualization_3d.refresh_view_mode)
         self.main_view.mode_changed.connect(self.main_view.graph_view.update_mode_selection)
+        self.main_view.mode_changed.connect(self.subject_info.refresh_mode_ui)
 
     @pyqtSlot(str)
     def update_mode(self, mode_name: str):

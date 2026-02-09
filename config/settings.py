@@ -68,9 +68,9 @@ class SubjectConfig:
     foot_ratio: float = 0.152
     upperarm_ratio: float = 0.186
     lowerarm_ratio: float = 0.146
-    pelvis_chest_ratio: float = 0.190
-    chest_neck_ratio: float = 0.150
-    chest_shoulder_ratio: float = 0.156
+    abdomen_ratio: float = 0.190
+    chest_ratio: float = 0.150
+    head_ratio: float = 0.100
 
 
 @dataclass
@@ -163,6 +163,9 @@ class AppSettings:
             'thigh': self.subject.thigh_ratio,
             'shank': self.subject.shank_ratio,
             'foot': self.subject.foot_ratio,
+            'abdomen': self.subject.abdomen_ratio,
+            'chest': self.subject.chest_ratio,
+            'head': self.subject.head_ratio,  # Approximate head height
             'upperarm': self.subject.upperarm_ratio,
             'lowerarm': self.subject.lowerarm_ratio
         }
