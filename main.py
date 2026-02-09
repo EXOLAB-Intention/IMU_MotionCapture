@@ -41,6 +41,12 @@ def main():
     # Set application style
     app.setStyle("Fusion")
     
+    # Set uniform font size for entire application
+    from PyQt5.QtGui import QFont
+    font = QFont()
+    font.setPointSize(10)  # 10pt for consistent UI
+    app.setFont(font)
+    
     # Create and show main window
     window = MainWindow()
     window.show()

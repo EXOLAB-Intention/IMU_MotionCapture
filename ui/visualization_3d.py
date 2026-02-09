@@ -5,6 +5,7 @@ Provides interactive 3D skeleton rendering with smooth playback
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QSlider
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot
 import numpy as np
+
 from config.settings import app_settings
 
 try:
@@ -37,12 +38,6 @@ class Visualization3D(QWidget):
         'thigh': 0.40,     # Hip to knee
         'shank': 0.42,     # Knee to ankle
         'foot': 0.25,      # Ankle to toe
-        # Upper body segments can be added similarly
-        'abdomen': 0.25,     # Pelvis to chest
-        'chest': 0.20,       # Chest to head
-        'head': 0.20,        # Head height
-        'upperarm': 0.25,  # Shoulder to elbow
-        'lowerarm': 0.25   # Elbow to wrist
     }
     
     def __init__(self, parent=None):
@@ -55,15 +50,49 @@ class Visualization3D(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self._advance_frame)
         
+        # Segment lengths (meters) - initialized from settings
+        self.SEGMENT_LENGTHS = {
+            'trunk': 0.50,     # Torso height
+            'thigh': 0.40,     # Hip to knee
+            'shank': 0.42,     # Knee to ankle
+            'foot': 0.25,      # Ankle to toe
+            # Upper body segments can be added similarly
+            'abdomen': 0.25,     # Pelvis to chest
+            'chest': 0.20,       # Chest to head
+            'head': 0.20,        # Head height
+            'upperarm': 0.25,  # Shoulder to elbow
+            'lowerarm': 0.25   # Elbow to wrist
+        }
+        
+        # Load initial segment lengths from settings
+        self._load_segment_lengths_from_settings()
+        
         # Playback state
         self.playback_start_time = 0.0  # Real-time start (seconds)
         self.playback_start_frame = 0   # Frame index at start
         self.sampling_rate = 500.0      # Hz (will be updated from data)
         
+        # Grid wrapping parameters (for treadmill effect)
+        self.grid_wrap_threshold = 0.4  # Faster wrap/reset cycle
+        self.grid_wrap_period = 0.4  # Scaled with grid_scale (0.4/0.2 = 2x)
+        
         # 3D Graphics items
         self.skeleton_items = {}
         self.joint_items = {}
         self.axis_items = {}  # Segment coordinate axes
+        self.grid = None  # Grid item for ground plane
+        self.grid_scale = 0.4  # Store grid scale (larger for better visibility)
+        
+        # Foot contact tracking for grid movement
+        self.foot_contact_right = None
+        self.foot_contact_left = None
+        self.gait_start_frame = None
+        self.gait_end_frame = None
+        self.grid_offset = np.array([0.0, 0.0, 0.0])  # Grid position offset
+        self.reference_foot_pre_gait = None  # Which foot to track before gait_start
+        self.reference_foot_post_gait = None  # Which foot to track after gait_end
+        self._prev_tracked_foot = None  # Track which foot we're currently following
+        self._prev_foot_position = None  # Previous position of tracked foot for displacement calc
         
         self._init_ui()
     
@@ -87,9 +116,9 @@ class Visualization3D(QWidget):
             self.view_widget.setCameraPosition(distance=3.0, elevation=20, azimuth=45)
             
             # Add grid
-            grid = gl.GLGridItem()
-            grid.scale(0.2, 0.2, 0.2)
-            self.view_widget.addItem(grid)
+            self.grid = gl.GLGridItem()
+            self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
+            self.view_widget.addItem(self.grid)
             
             # Add coordinate axes
             self._add_axes()
@@ -129,20 +158,75 @@ class Visualization3D(QWidget):
         
         layout.addLayout(controls_layout)
         
-        # Frame slider for manual scrubbing
-        slider_layout = QHBoxLayout()
-        slider_layout.addWidget(QLabel("Frame:"))
-        
-        self.frame_slider = QSlider(Qt.Horizontal)
-        self.frame_slider.setEnabled(False)
-        self.frame_slider.setMinimum(0)
-        self.frame_slider.setMaximum(0)
-        self.frame_slider.valueChanged.connect(self._on_slider_changed)
-        slider_layout.addWidget(self.frame_slider, stretch=1)
-        
-        layout.addLayout(slider_layout)
-        
         self.setLayout(layout)
+    
+    def _load_segment_lengths_from_settings(self):
+        """Load segment lengths from app settings based on subject height"""
+        try:
+            # Get segment lengths from settings (in cm, converted to m)
+            self.SEGMENT_LENGTHS['trunk'] = app_settings.get_segment_length('trunk') / 100.0
+            self.SEGMENT_LENGTHS['thigh'] = app_settings.get_segment_length('thigh') / 100.0
+            self.SEGMENT_LENGTHS['shank'] = app_settings.get_segment_length('shank') / 100.0
+            self.SEGMENT_LENGTHS['foot'] = app_settings.get_segment_length('foot') / 100.0
+            self.SEGMENT_LENGTHS['abdomen'] = app_settings.get_segment_length('abdomen') / 100.0
+            self.SEGMENT_LENGTHS['chest'] = app_settings.get_segment_length('chest') / 100.0
+            self.SEGMENT_LENGTHS['head'] = app_settings.get_segment_length('head') / 100.0
+            self.SEGMENT_LENGTHS['upperarm'] = app_settings.get_segment_length('upperarm') / 100.0
+            self.SEGMENT_LENGTHS['lowerarm'] = app_settings.get_segment_length('lowerarm') / 100.0
+        except Exception as e:
+            # Fallback to default values if settings not available
+            print(f"Warning: Could not load segment lengths from settings: {e}")
+            self.SEGMENT_LENGTHS = {
+                'trunk': 0.50,
+                'thigh': 0.40,
+                'shank': 0.42,
+                'foot': 0.25,
+                'abdomen': 0.35,
+                'chest': 0.25,
+                'head': 0.20,
+                'upperarm': 0.30,
+                'lowerarm': 0.25
+            }
+    
+    def update_segment_lengths(self, subject_info: dict):
+        """
+        Update segment lengths based on subject information.
+        
+        Args:
+            subject_info: Dictionary containing height and segment ratios
+        """
+        try:
+            height = subject_info.get('height', 170.0)  # cm
+            
+            # Get ratios
+            trunk_ratio = subject_info.get('trunk_ratio', 0.288)
+            thigh_ratio = subject_info.get('thigh_ratio', 0.232)
+            shank_ratio = subject_info.get('shank_ratio', 0.246)
+            foot_ratio = subject_info.get('foot_ratio', 0.152)
+            # Upper body ratios
+            abdomen_ratio = subject_info.get('abdomen_ratio', 0.190)
+            chest_ratio = subject_info.get('chest_ratio', 0.150)
+            head_ratio = subject_info.get('head_ratio', 0.100)
+            upperarm_ratio = subject_info.get('upperarm_ratio', 0.186)
+            lowerarm_ratio = subject_info.get('lowerarm_ratio', 0.146)
+            
+            # Calculate segment lengths (convert cm to m)
+            self.SEGMENT_LENGTHS['trunk'] = (height * trunk_ratio) / 100.0
+            self.SEGMENT_LENGTHS['thigh'] = (height * thigh_ratio) / 100.0
+            self.SEGMENT_LENGTHS['shank'] = (height * shank_ratio) / 100.0
+            self.SEGMENT_LENGTHS['foot'] = (height * foot_ratio) / 100.0
+            self.SEGMENT_LENGTHS['abdomen'] = (height * abdomen_ratio) / 100.0
+            self.SEGMENT_LENGTHS['chest'] = (height * chest_ratio) / 100.0
+            self.SEGMENT_LENGTHS['head'] = (height * head_ratio) / 100.0
+            self.SEGMENT_LENGTHS['upperarm'] = (height * upperarm_ratio) / 100.0
+            self.SEGMENT_LENGTHS['lowerarm'] = (height * lowerarm_ratio) / 100.0
+            
+            # If data is loaded, re-render current frame with new lengths
+            if self.current_data is not None:
+                self._render_frame(self.current_frame)
+                
+        except Exception as e:
+            print(f"Error updating segment lengths: {e}")
     
     def _add_axes(self):
         """Add coordinate axes to the 3D view"""
@@ -190,22 +274,21 @@ class Visualization3D(QWidget):
             first_sensor = next(iter(motion_data.imu_data.values()))
             n_frames = len(first_sensor.timestamps)
             
-            # Update UI elements
-            self.frame_slider.blockSignals(True)
-            self.frame_slider.setMaximum(n_frames - 1)
-            self.frame_slider.setValue(0)
-            self.frame_slider.setEnabled(True)
-            self.frame_slider.blockSignals(False)
-            
             self.frame_label.setText(f"Frame: 0 / {n_frames}")
             self.play_btn.setEnabled(True)
             
             # Initialize skeleton
             self._initialize_skeleton()
             self._render_frame(0)
+            # Reset grid offset
+            self.grid_offset = np.array([0.0, 0.0, 0.0])
+            
+            # Detect foot contact if not already detected
+            # This allows grid movement even without calibration
+            if motion_data.foot_contact_right is None or motion_data.foot_contact_left is None:
+                self._auto_detect_foot_contact(motion_data)
         else:
             self.frame_label.setText("Frame: 0 / 0")
-            self.frame_slider.setEnabled(False)
             self.play_btn.setEnabled(False)
 
     @pyqtSlot(str)
@@ -214,6 +297,136 @@ class Visualization3D(QWidget):
         if self.current_data:
             self._initialize_skeleton()
             self._render_frame(self.current_frame)
+    
+    def set_foot_contact(self, gait_start_frame: int, gait_end_frame: int, 
+                        foot_contact_right: np.ndarray, foot_contact_left: np.ndarray):
+        """
+        Set foot contact data for grid movement.
+        
+        Args:
+            gait_start_frame: Frame where gait starts (first foot leaves contact)
+            gait_end_frame: Frame where gait ends (both feet return to contact)
+            foot_contact_right: Boolean array indicating right foot contact
+            foot_contact_left: Boolean array indicating left foot contact
+        """
+        self.gait_start_frame = gait_start_frame
+        self.gait_end_frame = gait_end_frame
+        self.foot_contact_right = foot_contact_right
+        self.foot_contact_left = foot_contact_left
+        
+        # Determine reference feet for pre/post gait periods
+        # Pre-gait: use the foot that will be in contact at gait_start_frame
+        if gait_start_frame < len(foot_contact_right):
+            if foot_contact_right[gait_start_frame]:
+                self.reference_foot_pre_gait = 'right'
+            elif foot_contact_left[gait_start_frame]:
+                self.reference_foot_pre_gait = 'left'
+        
+        # Post-gait: use the foot that is in contact at gait_end_frame
+        if gait_end_frame < len(foot_contact_right):
+            if foot_contact_right[gait_end_frame]:
+                self.reference_foot_post_gait = 'right'
+            elif foot_contact_left[gait_end_frame]:
+                self.reference_foot_post_gait = 'left'
+    
+    def _auto_detect_foot_contact(self, motion_data):
+        """
+        Automatically detect foot contact when data is not already processed.
+        This allows grid movement to work even without calibration.
+        
+        Args:
+            motion_data: MotionCaptureData object
+        """
+        try:
+            from core.kinematics import KinematicsProcessor
+            
+            # Check if foot sensors are available
+            if 'foot_right' not in motion_data.imu_data or 'foot_left' not in motion_data.imu_data:
+                print("Warning: Foot sensors not found. Grid movement will not work.")
+                return
+            
+            # Create kinematics processor and detect foot contact
+            kinematics_processor = KinematicsProcessor()
+            gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
+                kinematics_processor.detect_foot_contact(motion_data)
+            
+            # Set the detected foot contact data
+            self.set_foot_contact(gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left)
+            
+            # Also update the motion_data so it's preserved
+            motion_data.gait_start_frame = gait_start_frame
+            motion_data.gait_end_frame = gait_end_frame
+            motion_data.foot_contact_right = foot_contact_right
+            motion_data.foot_contact_left = foot_contact_left
+            
+        except Exception as e:
+            print(f"Error detecting foot contact: {e}")
+            print("Grid movement will not work. Make sure foot sensors are available.")
+    
+    def set_foot_contact(self, gait_start_frame: int, gait_end_frame: int, 
+                        foot_contact_right: np.ndarray, foot_contact_left: np.ndarray):
+        """
+        Set foot contact data for grid movement.
+        
+        Args:
+            gait_start_frame: Frame where gait starts (first foot leaves contact)
+            gait_end_frame: Frame where gait ends (both feet return to contact)
+            foot_contact_right: Boolean array indicating right foot contact
+            foot_contact_left: Boolean array indicating left foot contact
+        """
+        self.gait_start_frame = gait_start_frame
+        self.gait_end_frame = gait_end_frame
+        self.foot_contact_right = foot_contact_right
+        self.foot_contact_left = foot_contact_left
+        
+        # Determine reference feet for pre/post gait periods
+        # Pre-gait: use the foot that will be in contact at gait_start_frame
+        if gait_start_frame < len(foot_contact_right):
+            if foot_contact_right[gait_start_frame]:
+                self.reference_foot_pre_gait = 'right'
+            elif foot_contact_left[gait_start_frame]:
+                self.reference_foot_pre_gait = 'left'
+        
+        # Post-gait: use the foot that is in contact at gait_end_frame
+        if gait_end_frame < len(foot_contact_right):
+            if foot_contact_right[gait_end_frame]:
+                self.reference_foot_post_gait = 'right'
+            elif foot_contact_left[gait_end_frame]:
+                self.reference_foot_post_gait = 'left'
+    
+    def _auto_detect_foot_contact(self, motion_data):
+        """
+        Automatically detect foot contact when data is not already processed.
+        This allows grid movement to work even without calibration.
+        
+        Args:
+            motion_data: MotionCaptureData object
+        """
+        try:
+            from core.kinematics import KinematicsProcessor
+            
+            # Check if foot sensors are available
+            if 'foot_right' not in motion_data.imu_data or 'foot_left' not in motion_data.imu_data:
+                print("Warning: Foot sensors not found. Grid movement will not work.")
+                return
+            
+            # Create kinematics processor and detect foot contact
+            kinematics_processor = KinematicsProcessor()
+            gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
+                kinematics_processor.detect_foot_contact(motion_data)
+            
+            # Set the detected foot contact data
+            self.set_foot_contact(gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left)
+            
+            # Also update the motion_data so it's preserved
+            motion_data.gait_start_frame = gait_start_frame
+            motion_data.gait_end_frame = gait_end_frame
+            motion_data.foot_contact_right = foot_contact_right
+            motion_data.foot_contact_left = foot_contact_left
+            
+        except Exception as e:
+            print(f"Error detecting foot contact: {e}")
+            print("Grid movement will not work. Make sure foot sensors are available.")
     
     def _initialize_skeleton(self):
         """Initialize skeleton graphics items"""
@@ -340,16 +553,14 @@ class Visualization3D(QWidget):
         # Update frame info
         self.frame_label.setText(f"Frame: {frame_index} / {n_frames}")
         
-        # Update slider without triggering valueChanged signal
-        self.frame_slider.blockSignals(True)
-        self.frame_slider.setValue(frame_index)
-        self.frame_slider.blockSignals(False)
-        
         # Calculate joint positions using forward kinematics
         positions = self._calculate_joint_positions(frame_index)
         
         # Update skeleton visualization
         self._update_skeleton(positions)
+        
+        # Update grid position based on foot contact
+        self._update_grid_position(frame_index, positions)
         
         # Emit signal AFTER all updates complete (only if not updating from external source)
         if not self._updating:
@@ -361,19 +572,20 @@ class Visualization3D(QWidget):
         
         Global coordinate system: X=forward, Y=left, Z=up
         
-        IMU attachment directions (sensor local frame):
-        - trunk:       x-up, y-right, z-forward
-        - thigh/shank: x-up, y-left,  z-backward
-        - foot:        x-backward, y-left, z-down
+        UNIFIED IMU attachment directions (sensor local frame):
+        All segments now use the same coordinate system after calibration:
+        - trunk:       x-up, y-left, z-backward
+        - thigh/shank: x-up, y-left, z-backward
+        - foot:        x-up, y-left, z-backward
         
-        After N-pose calibration with qD=[1,0,0,0], the calibrated quaternion
+        After N-pose calibration with unified q_desired, the calibrated quaternion
         represents the rotation FROM sensor's local frame TO global frame.
         
         So to get segment direction in global frame:
         - trunk: local +X (up) → apply q_trunk
         - thigh: local -X (down, since x-up and leg goes down) → apply q_thigh
         - shank: local -X (down) → apply q_shank
-        - foot:  local -Z (forward, since z-down and foot points forward) → apply q_foot
+        - foot:  local -X (down to forward, following leg direction) → apply q_foot
         """
         positions = {}
         current_mode = app_settings.mode.mode_type
@@ -486,7 +698,8 @@ class Visualization3D(QWidget):
             # ============================================================
             # Segment direction vectors in IMU LOCAL coordinates
             # These represent the segment's longitudinal axis in sensor frame
-            # ============================================================
+            # All segments now have UNIFIED coordinate system (x-up, y-left, z-backward)
+        # ============================================================
             
             # trunk: IMU x-axis points UP along trunk → local +X is segment direction
             trunk_local_dir = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
@@ -495,12 +708,11 @@ class Visualization3D(QWidget):
             thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
             shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
             
-            # foot: IMU z-axis points DOWN, foot points FORWARD → local -Z is segment direction
-            # (Actually, if IMU x=backward, z=down, then forward is -X)
-            foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
+            # foot: IMU z-axis points BACKWARD, foot points FORWARD → local -Z is segment direction
+            foot_local_dir = np.array([0.0, 0.0, -self.SEGMENT_LENGTHS['foot']])
             
-            # Hip offsets in trunk's local frame (y-right means -Y is left)
-            # trunk: y-right, so right hip offset is local -Y, left hip offset is local +Y
+            # Hip offsets in trunk's local frame
+            # With unified coordinate system: y-left, so right hip is -Y, left hip is +Y
             rhip_local_offset = np.array([0.0, -0.15, 0.0])
             lhip_local_offset = np.array([0.0, 0.15, 0.0])
             
@@ -660,10 +872,108 @@ class Visualization3D(QWidget):
             y_axis.setData(pos=np.array([center_pos, center_pos + global_y]))
             z_axis.setData(pos=np.array([center_pos, center_pos + global_z]))
     
-    def _on_slider_changed(self, value: int):
-        """Handle frame slider changes (manual scrubbing)"""
-        if not self.is_playing:  # Only respond if not playing
-            self._render_frame(value)
+    def _update_grid_position(self, frame_index: int, positions: dict):
+        """
+        Update grid position to follow foot contact during gait.
+        
+        Logic:
+        - Grid follows the displacement (change in position) of the tracked foot
+        - When switching feet, the new foot becomes the tracking target
+        - Grid position changes based on relative movement, not absolute position
+        
+        Grid follows X,Y coordinates only (height Z remains constant)
+        Reference point: center of foot segment = (toe + ankle) / 2
+        """
+        if self.grid is None or self.foot_contact_right is None or self.foot_contact_left is None:
+            return
+        
+        if self.gait_start_frame is None or self.gait_end_frame is None:
+            return
+        
+        # Get foot center positions
+        foot_right_center = (positions['toe_right'] + positions['ankle_right']) / 2
+        foot_left_center = (positions['toe_left'] + positions['ankle_left']) / 2
+        
+        # Determine which foot to track
+        tracked_foot = None
+        tracked_position = None
+        
+        if frame_index < self.gait_start_frame:
+            # Before gait starts: track the pre-gait reference foot
+            tracked_foot = self.reference_foot_pre_gait
+            if tracked_foot == 'right':
+                tracked_position = foot_right_center
+            else:
+                tracked_position = foot_left_center
+        elif frame_index <= self.gait_end_frame:
+            # During gait: track the foot currently in contact
+            if self.foot_contact_right[frame_index]:
+                tracked_foot = 'right'
+                tracked_position = foot_right_center
+            elif self.foot_contact_left[frame_index]:
+                tracked_foot = 'left'
+                tracked_position = foot_left_center
+        else:
+            # After gait ends: track the post-gait reference foot
+            tracked_foot = self.reference_foot_post_gait
+            if tracked_foot == 'right':
+                tracked_position = foot_right_center
+            else:
+                tracked_position = foot_left_center
+        
+        # If no valid foot to track, do nothing
+        if tracked_foot is None or tracked_position is None:
+            return
+        
+        # Initialize prev_position if not set (first frame or after switch)
+        if not hasattr(self, '_prev_tracked_foot') or self._prev_tracked_foot != tracked_foot:
+            # Foot switched or first initialization
+            self._prev_tracked_foot = tracked_foot
+            self._prev_foot_position = tracked_position.copy()
+            # Snap to nearest grid boundary while keeping visual pattern seamless
+            # Store the visual grid position (using modulo)
+            visual_x = self.grid_offset[0] % self.grid_wrap_period
+            visual_y = self.grid_offset[1] % self.grid_wrap_period
+            # Update grid to this position
+            self.grid.resetTransform()
+            self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
+            self.grid.translate(visual_x, visual_y, self.grid_offset[2])
+            # Update offset to match the visual position (keeps it small, near origin)
+            self.grid_offset = np.array([visual_x, visual_y, self.grid_offset[2]])
+            # Don't update grid on switch, just set baseline for next calculation
+            return
+        
+        # Calculate displacement of the tracked foot
+        displacement = tracked_position - self._prev_foot_position
+        
+        # Apply displacement to grid (only X, Y components)
+        self.grid_offset[0] += displacement[0]
+        self.grid_offset[1] += displacement[1]
+        
+        # Update previous position for next frame
+        self._prev_foot_position = tracked_position.copy()
+        
+        # Apply wrapping to keep grid visible (treadmill effect)
+        # Reset offset when it exceeds threshold, using modulo for seamless grid pattern
+        grid_translate_x = self.grid_offset[0]
+        grid_translate_y = self.grid_offset[1]
+        
+        # Wrap offset to keep grid in view and maintain seamless pattern
+        if abs(self.grid_offset[0]) > self.grid_wrap_threshold:
+            self.grid_offset[0] = self.grid_offset[0] % self.grid_wrap_period
+            self.grid_offset[1] = self.grid_offset[1] % self.grid_wrap_period  # Also reset Y axis
+        
+        if abs(self.grid_offset[1]) > self.grid_wrap_threshold:
+            self.grid_offset[0] = self.grid_offset[0] % self.grid_wrap_period  # Also reset X axis
+            self.grid_offset[1] = self.grid_offset[1] % self.grid_wrap_period
+        
+        grid_translate_x = self.grid_offset[0]
+        grid_translate_y = self.grid_offset[1]
+        
+        # Apply offset to grid (restore scale and apply translation)
+        self.grid.resetTransform()
+        self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
+        self.grid.translate(grid_translate_x, grid_translate_y, self.grid_offset[2])
     
     def _toggle_playback(self):
         """Toggle play/pause"""
@@ -764,9 +1074,6 @@ class Visualization3D(QWidget):
         self.current_frame = 0
         self._stop_playback()
         self.frame_label.setText("Frame: 0 / 0")
-        self.frame_slider.setEnabled(False)
-        self.frame_slider.setValue(0)
-        self.frame_slider.setMaximum(0)
         self.play_btn.setEnabled(False)
         
         # Remove skeleton items

@@ -13,6 +13,7 @@ from datetime import datetime
 from ui.menu_bar import MenuBar
 from ui.navigator import NavigatorPanel
 from ui.notes import NotesPanel
+from ui.subject_info_panel import SubjectInfoPanel
 from ui.main_view import MainView
 from file_io.file_handler import FileHandler
 from core.data_processor import DataProcessor
@@ -63,21 +64,45 @@ class MainWindow(QMainWindow):
         
         main_layout = QHBoxLayout()
         
-        # Left panel: Navigator and Notes in tabs
-        left_panel = QTabWidget()
+        # ====================================================================
+        # LEFT PANEL: Subject Info (top) + Notes (bottom) - Vertical split
+        # ====================================================================
+        left_panel = QSplitter(Qt.Vertical)
         left_panel.setMaximumWidth(350)
         
-        self.navigator = NavigatorPanel()
-        self.notes = NotesPanel()
+        # Subject info panel (top)
+        self.subject_info = SubjectInfoPanel()
+        left_panel.addWidget(self.subject_info)
         
-        left_panel.addTab(self.navigator, "Navigator")
-        left_panel.addTab(self.notes, "Notes")
+        # Notes panel (bottom)
+        self.notes = NotesPanel()
+        left_panel.addWidget(self.notes)
+        
+        # Set initial sizes (roughly equal)
+        left_panel.setSizes([175, 175])
         
         main_layout.addWidget(left_panel)
         
-        # Right panel: Main view
+        # ====================================================================
+        # RIGHT PANEL: Main View (top) + Navigator (bottom) - Adjustable splitter
+        # ====================================================================
+        right_panel = QSplitter(Qt.Vertical)
+        
+        # Main view (top - 3D visualization and graphs)
         self.main_view = MainView()
-        main_layout.addWidget(self.main_view, stretch=1)
+        right_panel.addWidget(self.main_view)
+        
+        # Navigator (bottom)
+        self.navigator = NavigatorPanel()
+        right_panel.addWidget(self.navigator)
+        
+        # Set initial sizes (5:5 ratio for better balance - 450:450)
+        # User can adjust with mouse
+        right_panel.setSizes([450, 450])
+        right_panel.setStretchFactor(0, 1)  # Main view stretches
+        right_panel.setStretchFactor(1, 1)  # Navigator stretches equally
+        
+        main_layout.addWidget(right_panel, stretch=1)
         
         central_widget.setLayout(main_layout)
     
@@ -97,6 +122,11 @@ class MainWindow(QMainWindow):
         
         # Navigator signals
         self.navigator.file_selected.connect(self.load_selected_file)
+        self.navigator.folder_selected.connect(self.on_folder_selected)
+        
+        # Subject info signals
+        self.subject_info.subject_info_changed.connect(self.on_subject_info_changed)
+        self.subject_info.subject_info_saved.connect(self.on_subject_info_saved)
         
         # Notes signals
         self.notes.notes_changed.connect(self.update_notes)
@@ -138,6 +168,10 @@ class MainWindow(QMainWindow):
             self.notes.set_file(os.path.basename(filepath))
             self.notes.set_notes(data.notes)
             
+            # Auto-load subject info from the file's folder
+            file_folder = os.path.dirname(filepath)
+            self._auto_load_subject_info_for_folder(file_folder)
+            
             self.statusBar().showMessage(f"Imported: {filepath}", 3000)
             
             # Check if all sensors are present
@@ -170,6 +204,10 @@ class MainWindow(QMainWindow):
             self.main_view.set_data(data)
             self.notes.set_file(os.path.basename(filepath))
             self.notes.set_notes(data.notes)
+            
+            # Auto-load subject info from the file's folder
+            file_folder = os.path.dirname(filepath)
+            self._auto_load_subject_info_for_folder(file_folder)
             
             self.statusBar().showMessage(f"Opened: {filepath}", 3000)
         
@@ -315,6 +353,68 @@ class MainWindow(QMainWindow):
         if self.current_data:
             self.current_data.notes = notes
             self.statusBar().showMessage("Notes updated", 2000)
+    
+    @pyqtSlot(str)
+    def on_folder_selected(self, folder_path: str):
+        """Handle folder selection in navigator"""
+        # Set current folder in subject info panel
+        self.subject_info.set_current_folder(folder_path)
+        self.statusBar().showMessage(f"Selected folder: {os.path.basename(folder_path)}", 2000)
+    
+    @pyqtSlot(dict)
+    def on_subject_info_changed(self, subject_info: dict):
+        """Handle subject info change - update visualization"""
+        try:
+            # Update visualization segment lengths
+            self.main_view.update_segment_lengths(subject_info)
+            
+            self.statusBar().showMessage(
+                f"Updated segment lengths for {subject_info.get('name', 'subject')}", 
+                2000
+            )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Update Error",
+                f"Failed to update visualization:\n{str(e)}"
+            )
+    
+    @pyqtSlot(str)
+    
+    def _auto_load_subject_info_for_folder(self, folder_path: str):
+        """
+        Auto-load subject info file (.subject) from a folder if it exists.
+        This is called when importing/opening files to automatically apply segment lengths.
+        """
+        if not folder_path or not os.path.isdir(folder_path):
+            return
+        
+        # Set the folder first so Save button works properly
+        self.subject_info.set_current_folder(folder_path)
+        
+        try:
+            # Look for .subject files in the folder
+            subject_files = [f for f in os.listdir(folder_path) if f.endswith('.subject')]
+            
+            if subject_files:
+                # Load the first .subject file found
+                subject_file_path = os.path.join(folder_path, subject_files[0])
+                
+                # Load subject info into the subject info panel
+                self.subject_info.load_subject_file(subject_file_path)
+                
+                # The signal will automatically update visualization
+                self.statusBar().showMessage(
+                    f"Auto-loaded subject info: {subject_files[0]}", 
+                    2000
+                )
+        except Exception as e:
+            # Silently fail - it's an optional feature
+            print(f"Could not auto-load subject info from {folder_path}: {e}")
+    def on_subject_info_saved(self, filepath: str):
+        """Handle subject info save - refresh navigator"""
+        self.navigator.refresh()
+        self.statusBar().showMessage(f"Subject info saved: {os.path.basename(filepath)}", 2000)
     
     def _update_calibration_status(self):
         """Update calibration status indicator in status bar"""

@@ -40,10 +40,11 @@ class CalibrationProcessor:
         """
         Get desired (ideal) IMU orientations as quaternions.
         
-        IMU attachment directions at N-pose:
-        - trunk:       x-up, y-right, z-forward
-        - thigh/shank: x-up, y-left,  z-backward
-        - foot:        x-backward, y-left, z-down
+        IMU attachment directions at N-pose (UNIFIED):
+        All segments use the same coordinate system:
+        - trunk:       x-up, y-left, z-backward
+        - thigh/shank: x-up, y-left, z-backward
+        - foot:        x-up, y-left, z-backward
         
         Rotation matrix R: R @ v_local = v_global
         Each column of R is where the sensor's local axis points in global frame.
@@ -78,14 +79,14 @@ class CalibrationProcessor:
             q = np.array([w, x, y, z])
             return q / np.linalg.norm(q)
         
-        # trunk: x-up, y-right, z-forward
+        # trunk: x-up, y-left, z-backward (same as thigh/shank)
         # sensor x → global [0, 0, 1] (up)
-        # sensor y → global [0, -1, 0] (right = -left)
-        # sensor z → global [1, 0, 0] (forward)
+        # sensor y → global [0, 1, 0] (left)
+        # sensor z → global [-1, 0, 0] (backward)
         R_trunk = np.array([
             [0, 0, 1],    # column 0: sensor x in global
-            [0, -1, 0],   # column 1: sensor y in global
-            [1, 0, 0]     # column 2: sensor z in global
+            [0, 1, 0],    # column 1: sensor y in global
+            [-1, 0, 0]    # column 2: sensor z in global
         ]).T  # transpose to get columns right
         q_trunk = rotmat_to_quat(R_trunk)
 
@@ -144,14 +145,14 @@ class CalibrationProcessor:
                 [-1, 0, 0]
             ]).T
             
-            # foot: x-backward, y-left, z-down
-            # sensor x → global [-1, 0, 0] (backward)
+            # foot: x-up, y-left, z-backward (same as thigh/shank)
+            # sensor x → global [0, 0, 1] (up)
             # sensor y → global [0, 1, 0] (left)
-            # sensor z → global [0, 0, -1] (down)
+            # sensor z → global [-1, 0, 0] (backward)
             R_foot = np.array([
-                [-1, 0, 0],
+                [0, 0, 1],
                 [0, 1, 0],
-                [0, 0, -1]
+                [-1, 0, 0]
             ]).T
             
             q_thigh = rotmat_to_quat(R_thigh)

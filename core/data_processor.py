@@ -63,7 +63,14 @@ class DataProcessor:
         
         # Step 4: Detect foot contacts
         print("Step 4: Detecting foot contacts...")
-        foot_contact_right, foot_contact_left = self.kinematics_processor.detect_foot_contact(data)
+        gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
+            self.kinematics_processor.detect_foot_contact(data)
+        
+        # Store gait parameters in data
+        data.gait_start_frame = gait_start_frame
+        data.gait_end_frame = gait_end_frame
+        data.foot_contact_right = foot_contact_right
+        data.foot_contact_left = foot_contact_left
         
         # Step 5: Compute velocity
         print("Step 5: Computing trunk velocity...")
@@ -130,7 +137,14 @@ class DataProcessor:
         
         # Step 3: Detect foot contacts
         print("Step 3: Detecting foot contacts...")
-        foot_contact_right, foot_contact_left = self.kinematics_processor.detect_foot_contact(data)
+        gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
+            self.kinematics_processor.detect_foot_contact(data)
+        
+        # Store gait parameters in data
+        data.gait_start_frame = gait_start_frame
+        data.gait_end_frame = gait_end_frame
+        data.foot_contact_right = foot_contact_right
+        data.foot_contact_left = foot_contact_left
         
         # Step 4: Compute velocity
         print("Step 4: Computing trunk velocity...")
