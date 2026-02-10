@@ -363,71 +363,6 @@ class Visualization3D(QWidget):
             print(f"Error detecting foot contact: {e}")
             print("Grid movement will not work. Make sure foot sensors are available.")
     
-    def set_foot_contact(self, gait_start_frame: int, gait_end_frame: int, 
-                        foot_contact_right: np.ndarray, foot_contact_left: np.ndarray):
-        """
-        Set foot contact data for grid movement.
-        
-        Args:
-            gait_start_frame: Frame where gait starts (first foot leaves contact)
-            gait_end_frame: Frame where gait ends (both feet return to contact)
-            foot_contact_right: Boolean array indicating right foot contact
-            foot_contact_left: Boolean array indicating left foot contact
-        """
-        self.gait_start_frame = gait_start_frame
-        self.gait_end_frame = gait_end_frame
-        self.foot_contact_right = foot_contact_right
-        self.foot_contact_left = foot_contact_left
-        
-        # Determine reference feet for pre/post gait periods
-        # Pre-gait: use the foot that will be in contact at gait_start_frame
-        if gait_start_frame < len(foot_contact_right):
-            if foot_contact_right[gait_start_frame]:
-                self.reference_foot_pre_gait = 'right'
-            elif foot_contact_left[gait_start_frame]:
-                self.reference_foot_pre_gait = 'left'
-        
-        # Post-gait: use the foot that is in contact at gait_end_frame
-        if gait_end_frame < len(foot_contact_right):
-            if foot_contact_right[gait_end_frame]:
-                self.reference_foot_post_gait = 'right'
-            elif foot_contact_left[gait_end_frame]:
-                self.reference_foot_post_gait = 'left'
-    
-    def _auto_detect_foot_contact(self, motion_data):
-        """
-        Automatically detect foot contact when data is not already processed.
-        This allows grid movement to work even without calibration.
-        
-        Args:
-            motion_data: MotionCaptureData object
-        """
-        try:
-            from core.kinematics import KinematicsProcessor
-            
-            # Check if foot sensors are available
-            if 'foot_right' not in motion_data.imu_data or 'foot_left' not in motion_data.imu_data:
-                print("Warning: Foot sensors not found. Grid movement will not work.")
-                return
-            
-            # Create kinematics processor and detect foot contact
-            kinematics_processor = KinematicsProcessor()
-            gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
-                kinematics_processor.detect_foot_contact(motion_data)
-            
-            # Set the detected foot contact data
-            self.set_foot_contact(gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left)
-            
-            # Also update the motion_data so it's preserved
-            motion_data.gait_start_frame = gait_start_frame
-            motion_data.gait_end_frame = gait_end_frame
-            motion_data.foot_contact_right = foot_contact_right
-            motion_data.foot_contact_left = foot_contact_left
-            
-        except Exception as e:
-            print(f"Error detecting foot contact: {e}")
-            print("Grid movement will not work. Make sure foot sensors are available.")
-    
     def _initialize_skeleton(self):
         """Initialize skeleton graphics items"""
         if not PYQTGRAPH_AVAILABLE:
@@ -699,7 +634,7 @@ class Visualization3D(QWidget):
             # Segment direction vectors in IMU LOCAL coordinates
             # These represent the segment's longitudinal axis in sensor frame
             # All segments now have UNIFIED coordinate system (x-up, y-left, z-backward)
-        # ============================================================
+            # ============================================================
             
             # trunk: IMU x-axis points UP along trunk → local +X is segment direction
             trunk_local_dir = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
@@ -888,6 +823,11 @@ class Visualization3D(QWidget):
             return
         
         if self.gait_start_frame is None or self.gait_end_frame is None:
+            return
+        
+        current_mode = app_settings.mode.mode_type
+        if current_mode == 'Upper-body':
+            # Grid movement not applicable in Upper-body mode
             return
         
         # Get foot center positions
