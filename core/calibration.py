@@ -36,15 +36,15 @@ class CalibrationProcessor:
     # Ground coordinate: X=forward, Y=left, Z=up
     # =======================================================================
     @staticmethod
-    def _get_desired_quaternions(mode: str, pose_type: str) -> Dict[str, np.ndarray]:
+    def _get_desired_quaternions(mode: str, pose_type: str, walking_dir: np.ndarray) -> Dict[str, np.ndarray]:
         """
         Get desired (ideal) IMU orientations as quaternions.
         
         IMU attachment directions at N-pose (UNIFIED):
         All segments use the same coordinate system:
-        - trunk:       x-up, y-left, z-backward
-        - thigh/shank: x-up, y-left, z-backward
-        - foot:        x-up, y-left, z-backward
+        - trunk:       x-up, y-right, z-forward (walking direction)
+        - thigh/shank: x-up, y-right, z-forward
+        - foot:        x-up, y-right, z-forward
         
         Rotation matrix R: R @ v_local = v_global
         Each column of R is where the sensor's local axis points in global frame.
@@ -79,15 +79,27 @@ class CalibrationProcessor:
             q = np.array([w, x, y, z])
             return q / np.linalg.norm(q)
         
-        # trunk: x-up, y-left, z-backward (same as thigh/shank)
-        # sensor x → global [0, 0, 1] (up)
-        # sensor y → global [0, 1, 0] (left)
-        # sensor z → global [-1, 0, 0] (backward)
-        R_trunk = np.array([
-            [0, 0, 1],    # column 0: sensor x in global
-            [0, 1, 0],    # column 1: sensor y in global
-            [-1, 0, 0]    # column 2: sensor z in global
-        ]).T  # transpose to get columns right
+        walking_dir = walking_dir / np.linalg.norm(walking_dir)
+        up_dir = np.array([0.0, 0.0, 1.0])
+        right_dir = np.cross(walking_dir, up_dir)
+        right_dir = right_dir / np.linalg.norm(right_dir)
+        
+        # # trunk: x-up, y-left, z-backward (same as thigh/shank)
+        # # sensor x → global [0, 0, 1] (up)
+        # # sensor y → global [0, 1, 0] (left)
+        # # sensor z → global [-1, 0, 0] (backward)
+        # R_trunk = np.array([
+        #     [0, 0, 1],    # column 0: sensor x in global
+        #     [0, 1, 0],    # column 1: sensor y in global
+        #     [-1, 0, 0]    # column 2: sensor z in global
+        # ]).T  # transpose to get columns right
+
+        # trunk: x-up, y-right, z-forward (same as thigh/shank)
+        # sensor x → global up
+        # sensor y → global right (relative to walking direction)
+        # sensor z → global walking direction
+        R_trunk = np.column_stack([up_dir, right_dir, walking_dir])
+
         q_trunk = rotmat_to_quat(R_trunk)
 
         desired = {}
@@ -135,26 +147,38 @@ class CalibrationProcessor:
 
         else:
             # Lower-body desired quaternions
-            # thigh/shank: x-up, y-left, z-backward
-            # sensor x → global [0, 0, 1] (up)
-            # sensor y → global [0, 1, 0] (left)
-            # sensor z → global [-1, 0, 0] (backward)
-            R_thigh = np.array([
-                [0, 0, 1],
-                [0, 1, 0],
-                [-1, 0, 0]
-            ]).T
+            # # thigh/shank: x-up, y-left, z-backward
+            # # sensor x → global [0, 0, 1] (up)
+            # # sensor y → global [0, 1, 0] (left)
+            # # sensor z → global [-1, 0, 0] (backward)
+            # R_thigh = np.array([
+            #     [0, 0, 1],
+            #     [0, 1, 0],
+            #     [-1, 0, 0]
+            # ]).T
             
-            # foot: x-up, y-left, z-backward (same as thigh/shank)
-            # sensor x → global [0, 0, 1] (up)
-            # sensor y → global [0, 1, 0] (left)
-            # sensor z → global [-1, 0, 0] (backward)
-            R_foot = np.array([
-                [0, 0, 1],
-                [0, 1, 0],
-                [-1, 0, 0]
-            ]).T
+            # # foot: x-up, y-left, z-backward (same as thigh/shank)
+            # # sensor x → global [0, 0, 1] (up)
+            # # sensor y → global [0, 1, 0] (left)
+            # # sensor z → global [-1, 0, 0] (backward)
+            # R_foot = np.array([
+            #     [0, 0, 1],
+            #     [0, 1, 0],
+            #     [-1, 0, 0]
+            # ]).T
             
+            # thigh/shank: x-up, y-right, z-forward
+            # sensor x → global up
+            # sensor y → global right
+            # sensor z → global walking direction
+            R_thigh = R_trunk.copy()
+            
+            # foot: x-up, y-right, z-forward (same as thigh/shank)
+            # sensor x → global up
+            # sensor y → global right
+            # sensor z → global walking direction
+            R_foot = R_trunk.copy()
+
             q_thigh = rotmat_to_quat(R_thigh)
             q_foot = rotmat_to_quat(R_foot)
         
@@ -247,51 +271,94 @@ class CalibrationProcessor:
         print(f"Calibrating with {pose_type} in {mode} mode from {start_time:.2f}s to {end_time:.2f}s")
         print("Pipeline: q_offset = conj(q_calib) * q_desired, q_segment = q_measured * q_offset")
         
-        # Get desired quaternions for each segment
-        desired_quats = self._get_desired_quaternions(mode, pose_type)
-        
         for location, sensor_data in data.imu_data.items():
             mask = (sensor_data.timestamps >= start_time) & (sensor_data.timestamps <= end_time)
-            
+
             if not mask.any():
                 raise ValueError(f"No data found in calibration period for {location}")
-            
+
             # Get all quaternions in calibration window
             calib_quats = sensor_data.quaternions[mask]
-            
+
             # Normalize each quaternion
             norms = np.linalg.norm(calib_quats, axis=1, keepdims=True)
             calib_quats_norm = calib_quats / norms
-            
+
             # Average quaternions to get q_calib
             q_calib = self._average_quaternions(calib_quats_norm)
             self.calib_quaternions[location] = q_calib.copy()
-            
-            # Get q_desired for this segment
-            if location in desired_quats:
-                q_desired = desired_quats[location]
-            else:
-                q_desired = np.array([1.0, 0.0, 0.0, 0.0])  # identity as fallback
-            self.desired_quaternions[location] = q_desired.copy()
-            
-            # Compute q_offset = conj(q_calib) * q_desired (RIGHT multiplication)
-            q_calib_conj = KinematicsProcessor.quaternion_conjugate(q_calib)
-            q_offset = KinematicsProcessor.quaternion_multiply(q_calib_conj, q_desired)
-            q_offset = q_offset / np.linalg.norm(q_offset)
-            self.offset_quaternions[location] = q_offset
-            
-            print(f"  {location}:")
-            print(f"    q_calib   = [{q_calib[0]:.4f}, {q_calib[1]:.4f}, {q_calib[2]:.4f}, {q_calib[3]:.4f}]")
-            print(f"    q_desired = [{q_desired[0]:.4f}, {q_desired[1]:.4f}, {q_desired[2]:.4f}, {q_desired[3]:.4f}]")
-            print(f"    q_offset  = [{q_offset[0]:.4f}, {q_offset[1]:.4f}, {q_offset[2]:.4f}, {q_offset[3]:.4f}]")
-        
-        # Extract heading offset from trunk
+
+        # Determine walking direction from trunk local +Z (project to global XY)
+        walking_dir = np.array([1.0, 0.0, 0.0])
         if 'trunk' in self.calib_quaternions:
             q_trunk = self.calib_quaternions['trunk']
-            q_heading = self._extract_heading_quaternion(q_trunk)
-            self.heading_offset = q_heading.copy()
-            heading_angle = 2 * np.arctan2(q_heading[3], q_heading[0]) * 180 / np.pi
-            print(f"  Trunk heading: {heading_angle:.1f}° from global X")
+            R_trunk = KinematicsProcessor.quaternion_to_rotation_matrix(q_trunk)
+            trunk_local_z = np.array([0.0, 0.0, 1.0])
+            trunk_z_global = R_trunk @ trunk_local_z
+            trunk_z_proj = np.array([trunk_z_global[0], trunk_z_global[1], 0.0])
+            if np.linalg.norm(trunk_z_proj) >= 1e-6:
+                walking_dir = trunk_z_proj / np.linalg.norm(trunk_z_proj)
+
+        # ========================================
+        # VRU-AHS
+        # ========================================
+        # Get desired quaternions for each segment based on walking direction
+        local_forward_map = {
+            'trunk': np.array([0, 0, 1]),        # Z forward
+            'thigh_right': np.array([0, 1, 0]),  # X up, Z left -> Y is front (right thigh basis)
+            'thigh_left': np.array([0, -1, 0]),  # X up, Z right -> -Y is front (left thigh basis)
+            'shank_right': np.array([0, 1, 0]),
+            'shank_left': np.array([0, -1, 0]),
+            'foot_right': np.array([-1, 0, 0]),  # X backward -> -X is front
+            'foot_left': np.array([-1, 0, 0]),
+        }
+
+        # Compute offset quaternions to align heading to North
+        for location, q_calib in self.calib_quaternions.items():
+            l_fwd = local_forward_map.get(location, np.array([1, 0, 0]))
+            # Compute global forward direction of the segment's local forward axis
+            R = KinematicsProcessor.quaternion_to_rotation_matrix(q_calib)
+            g_fwd = R @ l_fwd
+            # Yaw angle of this forward direction in global XY plane
+            current_yaw = np.arctan2(g_fwd[1], g_fwd[0])
+
+            # Compute offset quaternion to rotate by -current_yaw for reset yaw to zero
+            q_offset = np.array([np.cos(-current_yaw/2), 0, 0, np.sin(-current_yaw/2)])
+            self.offset_quaternions[location] = q_offset
+
+        # ========================================
+        # North Reference
+        # ========================================
+        
+        # # Get desired quaternions for each segment based on walking direction
+        # desired_quats = self._get_desired_quaternions(mode, pose_type, walking_dir)
+
+        # for location, q_calib in self.calib_quaternions.items():
+        #     # Get q_desired for this segment
+        #     if location in desired_quats:
+        #         q_desired = desired_quats[location]
+        #     else:
+        #         q_desired = np.array([1.0, 0.0, 0.0, 0.0])  # identity as fallback
+        #     self.desired_quaternions[location] = q_desired.copy()
+
+        #     # Compute q_offset = conj(q_calib) * q_desired (RIGHT multiplication)
+        #     q_calib_conj = KinematicsProcessor.quaternion_conjugate(q_calib)
+        #     q_offset = KinematicsProcessor.quaternion_multiply(q_calib_conj, q_desired)
+        #     q_offset = q_offset / np.linalg.norm(q_offset)
+        #     self.offset_quaternions[location] = q_offset
+
+        #     print(f"  {location}:")
+        #     print(f"    q_calib   = [{q_calib[0]:.4f}, {q_calib[1]:.4f}, {q_calib[2]:.4f}, {q_calib[3]:.4f}]")
+        #     print(f"    q_desired = [{q_desired[0]:.4f}, {q_desired[1]:.4f}, {q_desired[2]:.4f}, {q_desired[3]:.4f}]")
+        #     print(f"    q_offset  = [{q_offset[0]:.4f}, {q_offset[1]:.4f}, {q_offset[2]:.4f}, {q_offset[3]:.4f}]")
+        
+        # # Extract heading offset from trunk
+        # if 'trunk' in self.calib_quaternions:
+        #     q_trunk = self.calib_quaternions['trunk']
+        #     q_heading = self._extract_heading_quaternion(q_trunk)
+        #     self.heading_offset = q_heading.copy()
+        #     heading_angle = 2 * np.arctan2(q_heading[3], q_heading[0]) * 180 / np.pi
+        #     print(f"  Trunk heading: {heading_angle:.1f}° from global X")
         
         self.is_calibrated = True
         self.pose_type = pose_type
@@ -328,8 +395,16 @@ class CalibrationProcessor:
             return quaternion
         
         q_offset = self.offset_quaternions[location]
-        q_segment = KinematicsProcessor.quaternion_multiply(quaternion, q_offset)
+        # ========================================
+        # VRU-AHS
+        # ========================================
+        q_segment = KinematicsProcessor.quaternion_multiply(q_offset, quaternion) # Left multiplication
         q_segment = q_segment / np.linalg.norm(q_segment)
+        # ========================================
+        # North Reference
+        # ========================================
+        # q_segment = KinematicsProcessor.quaternion_multiply(quaternion, q_offset) # Right multiplication
+        # q_segment = q_segment / np.linalg.norm(q_segment)
 
         return q_segment
 
@@ -493,10 +568,20 @@ class CalibrationProcessor:
             q_measured = sensor_data.quaternions
             q_measured_norm = KinematicsProcessor.quaternion_normalize(q_measured)
             
-            # Apply offset: q_segment = q_measured * q_offset (RIGHT multiplication)
-            q_segment = KinematicsProcessor.quaternion_multiply(q_measured_norm, q_offset)
+            # ========================================
+            # VRU-AHS
+            # ========================================
+            # Apply offset: q_segment = q_offset * q_measured (Left multiplication)
+            q_segment = KinematicsProcessor.quaternion_multiply(q_offset, q_measured_norm)
             q_segment = KinematicsProcessor.quaternion_normalize(q_segment)
-            
+
+            # ========================================
+            # North Reference
+            # ========================================
+            # Apply offset: q_segment = q_measured * q_offset (RIGHT multiplication)
+            # q_segment = KinematicsProcessor.quaternion_multiply(q_measured_norm, q_offset)
+            # q_segment = KinematicsProcessor.quaternion_normalize(q_segment)
+
             sensor_data.quaternions = q_segment
             print(f"  Calibrated {location}: {n_samples} samples")
         

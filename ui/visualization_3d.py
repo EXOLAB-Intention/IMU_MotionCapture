@@ -509,9 +509,9 @@ class Visualization3D(QWidget):
         
         UNIFIED IMU attachment directions (sensor local frame):
         All segments now use the same coordinate system after calibration:
-        - trunk:       x-up, y-left, z-backward
-        - thigh/shank: x-up, y-left, z-backward
-        - foot:        x-up, y-left, z-backward
+        - trunk:       x-up, y-right, z-forward (walking direction)
+        - thigh/shank: x-up, y-right, z-forward
+        - foot:        x-up, y-right, z-forward
         
         After N-pose calibration with unified q_desired, the calibrated quaternion
         represents the rotation FROM sensor's local frame TO global frame.
@@ -520,7 +520,7 @@ class Visualization3D(QWidget):
         - trunk: local +X (up) → apply q_trunk
         - thigh: local -X (down, since x-up and leg goes down) → apply q_thigh
         - shank: local -X (down) → apply q_shank
-        - foot:  local -X (down to forward, following leg direction) → apply q_foot
+        - foot:  local +Z (forward, following walking direction) → apply q_foot
         """
         positions = {}
         current_mode = app_settings.mode.mode_type
@@ -633,7 +633,7 @@ class Visualization3D(QWidget):
             # ============================================================
             # Segment direction vectors in IMU LOCAL coordinates
             # These represent the segment's longitudinal axis in sensor frame
-            # All segments now have UNIFIED coordinate system (x-up, y-left, z-backward)
+            # All segments now have UNIFIED coordinate system (x-up, y-right, z-forward)
             # ============================================================
             
             # trunk: IMU x-axis points UP along trunk → local +X is segment direction
@@ -643,13 +643,22 @@ class Visualization3D(QWidget):
             thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
             shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
             
-            # foot: IMU z-axis points BACKWARD, foot points FORWARD → local -Z is segment direction
-            foot_local_dir = np.array([0.0, 0.0, -self.SEGMENT_LENGTHS['foot']])
+            # =======================================================================
+            # VRU-AHS
+            # =======================================================================
+            # foot: IMU x-axis points BACKWARD → local -X is segment direction
+            foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
+
+            # =======================================================================
+            # North Reference
+            # =======================================================================
+            # foot: IMU z-axis points FORWARD → local +Z is segment direction
+            # foot_local_dir = np.array([0.0, 0.0, self.SEGMENT_LENGTHS['foot']])
             
             # Hip offsets in trunk's local frame
-            # With unified coordinate system: y-left, so right hip is -Y, left hip is +Y
-            rhip_local_offset = np.array([0.0, -0.15, 0.0])
-            lhip_local_offset = np.array([0.0, 0.15, 0.0])
+            # With unified coordinate system: y-right, so right hip is +Y, left hip is -Y
+            rhip_local_offset = np.array([0.0, 0.15, 0.0])
+            lhip_local_offset = np.array([0.0, -0.15, 0.0])
             
             # ============================================================
             # Forward Kinematics: rotate local directions to global frame
