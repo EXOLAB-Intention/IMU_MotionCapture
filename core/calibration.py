@@ -257,15 +257,6 @@ class CalibrationProcessor:
         data.calibration_start_time = start_time
         print("N-pose calibration complete!")
     
-    def _average_quaternions(self, quaternions: np.ndarray) -> np.ndarray:
-        """Average multiple quaternions using eigenvalue method."""
-        if len(quaternions) == 0:
-            raise ValueError("No quaternions provided for averaging")
-        M = np.dot(quaternions.T, quaternions)
-        eigenvalues, eigenvectors = np.linalg.eigh(M)
-        avg_quat = eigenvectors[:, np.argmax(eigenvalues)]
-        return avg_quat / np.linalg.norm(avg_quat)
-    
     def get_offset_quaternion(self, location: str) -> Optional[np.ndarray]:
         """Get offset quaternion for a sensor location"""
         return self.offset_quaternions.get(location)

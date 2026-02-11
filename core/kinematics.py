@@ -4,8 +4,8 @@ Kinematics processor for computing joint angles, orientations, and motion parame
 This module implements the quaternion operation pipeline based on MATLAB reference:
 1. Quaternion normalization: quatnormalize(q_raw)
 2. Desired orientation at calibration pose: plotQuatNearestAxes()
-3. Correction quaternion: qCorr = qD * q_raw(T_pose)^{-1}
-4. Apply correction: q_calibrated = qCorr * q_raw (LEFT multiplication)
+3. Offset quaternion: q_offset = conj(q_calib) * q_desired
+4. Apply offset: q_calibrated = q_raw * q_offset (RIGHT multiplication)
 5. Rotation matrix with Y180: R = R_y180 @ quat2rotm(q)
 6. Relative quaternion (joint angle): q_rel = conj(q_proximal) * q_distal
 """
@@ -22,10 +22,11 @@ class KinematicsProcessor:
     Computes kinematics from calibrated IMU data
     
     MATLAB Pipeline Implementation:
-    1. Quaternion operations use LEFT multiplication convention
-    2. Calibration: qCorr = qD * q_raw^{-1}, then q_cal = qCorr * q_raw
-    3. Joint angles: q_rel = conj(q_proximal) * q_distal
-    4. Rotation matrices: R = R_y180 @ quat2rotm(q)
+    1. Calibration uses RIGHT multiplication
+    2. Offset: q_offset = conj(q_calib) * q_desired
+    3. Apply: q_cal = q_raw * q_offset
+    4. Joint angles: q_rel = conj(q_proximal) * q_distal
+    5. Rotation matrices: R = R_y180 @ quat2rotm(q)
     """
     
     # Y-axis 180 degree rotation matrix (MATLAB: R_y180 = [-1 0 0; 0 1 0; 0 0 -1])
