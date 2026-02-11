@@ -53,6 +53,7 @@ class Visualization3D(QWidget):
         # Segment lengths (meters) - initialized from settings
         self.SEGMENT_LENGTHS = {
             'trunk': 0.50,     # Torso height
+            'pelvis': 0.45,    # Pelvis width
             'thigh': 0.40,     # Hip to knee
             'shank': 0.42,     # Knee to ankle
             'foot': 0.25,      # Ankle to toe
@@ -60,6 +61,7 @@ class Visualization3D(QWidget):
             'abdomen': 0.25,     # Pelvis to chest
             'chest': 0.20,       # Chest to head
             'head': 0.20,        # Head height
+            'shoulder': 0.45,   # Shoulder width
             'upperarm': 0.25,  # Shoulder to elbow
             'lowerarm': 0.25   # Elbow to wrist
         }
@@ -165,12 +167,14 @@ class Visualization3D(QWidget):
         try:
             # Get segment lengths from settings (in cm, converted to m)
             self.SEGMENT_LENGTHS['trunk'] = app_settings.get_segment_length('trunk') / 100.0
+            self.SEGMENT_LENGTHS['pelvis'] = app_settings.get_segment_length('pelvis') / 100.0
             self.SEGMENT_LENGTHS['thigh'] = app_settings.get_segment_length('thigh') / 100.0
             self.SEGMENT_LENGTHS['shank'] = app_settings.get_segment_length('shank') / 100.0
             self.SEGMENT_LENGTHS['foot'] = app_settings.get_segment_length('foot') / 100.0
             self.SEGMENT_LENGTHS['abdomen'] = app_settings.get_segment_length('abdomen') / 100.0
             self.SEGMENT_LENGTHS['chest'] = app_settings.get_segment_length('chest') / 100.0
             self.SEGMENT_LENGTHS['head'] = app_settings.get_segment_length('head') / 100.0
+            self.SEGMENT_LENGTHS['shoulder'] = app_settings.get_segment_length('shoulder') / 100.0
             self.SEGMENT_LENGTHS['upperarm'] = app_settings.get_segment_length('upperarm') / 100.0
             self.SEGMENT_LENGTHS['lowerarm'] = app_settings.get_segment_length('lowerarm') / 100.0
         except Exception as e:
@@ -178,12 +182,14 @@ class Visualization3D(QWidget):
             print(f"Warning: Could not load segment lengths from settings: {e}")
             self.SEGMENT_LENGTHS = {
                 'trunk': 0.50,
+                'pelvis': 0.45,
                 'thigh': 0.40,
                 'shank': 0.42,
                 'foot': 0.25,
                 'abdomen': 0.35,
                 'chest': 0.25,
                 'head': 0.20,
+                'shoulder': 0.40,
                 'upperarm': 0.30,
                 'lowerarm': 0.25
             }
@@ -200,6 +206,7 @@ class Visualization3D(QWidget):
             
             # Get ratios
             trunk_ratio = subject_info.get('trunk_ratio', 0.288)
+            pelvis_ratio = subject_info.get('pelvis_ratio', 0.250)
             thigh_ratio = subject_info.get('thigh_ratio', 0.232)
             shank_ratio = subject_info.get('shank_ratio', 0.246)
             foot_ratio = subject_info.get('foot_ratio', 0.152)
@@ -207,17 +214,20 @@ class Visualization3D(QWidget):
             abdomen_ratio = subject_info.get('abdomen_ratio', 0.190)
             chest_ratio = subject_info.get('chest_ratio', 0.150)
             head_ratio = subject_info.get('head_ratio', 0.100)
+            shoulder_ratio = subject_info.get('shoulder_ratio', 0.350)
             upperarm_ratio = subject_info.get('upperarm_ratio', 0.186)
             lowerarm_ratio = subject_info.get('lowerarm_ratio', 0.146)
             
             # Calculate segment lengths (convert cm to m)
             self.SEGMENT_LENGTHS['trunk'] = (height * trunk_ratio) / 100.0
+            self.SEGMENT_LENGTHS['pelvis'] = (height * pelvis_ratio) / 100.0
             self.SEGMENT_LENGTHS['thigh'] = (height * thigh_ratio) / 100.0
             self.SEGMENT_LENGTHS['shank'] = (height * shank_ratio) / 100.0
             self.SEGMENT_LENGTHS['foot'] = (height * foot_ratio) / 100.0
             self.SEGMENT_LENGTHS['abdomen'] = (height * abdomen_ratio) / 100.0
             self.SEGMENT_LENGTHS['chest'] = (height * chest_ratio) / 100.0
             self.SEGMENT_LENGTHS['head'] = (height * head_ratio) / 100.0
+            self.SEGMENT_LENGTHS['shoulder'] = (height * shoulder_ratio) / 100.0
             self.SEGMENT_LENGTHS['upperarm'] = (height * upperarm_ratio) / 100.0
             self.SEGMENT_LENGTHS['lowerarm'] = (height * lowerarm_ratio) / 100.0
             
@@ -572,8 +582,8 @@ class Visualization3D(QWidget):
             
             # Shoulder offsets in chest's local frame (y-right means -Y is left)
             # chest: y-right, so right shoulder offset is local -Y, left shoulder offset is local +Y
-            rshoulder_local_offset = np.array([0.0, 0.15, 0.0])
-            lshoulder_local_offset = np.array([0.0, -0.15, 0.0])
+            rshoulder_local_offset = np.array([0.0, self.SEGMENT_LENGTHS['shoulder']/2.0, 0.0])
+            lshoulder_local_offset = np.array([0.0, -self.SEGMENT_LENGTHS['shoulder']/2.0, 0.0])
             
             # ============================================================
             # Forward Kinematics: rotate local directions to global frame
@@ -657,8 +667,8 @@ class Visualization3D(QWidget):
             
             # Hip offsets in trunk's local frame
             # With unified coordinate system: y-right, so right hip is +Y, left hip is -Y
-            rhip_local_offset = np.array([0.0, 0.15, 0.0])
-            lhip_local_offset = np.array([0.0, -0.15, 0.0])
+            rhip_local_offset = np.array([0.0, self.SEGMENT_LENGTHS['pelvis']/2.0, 0.0])
+            lhip_local_offset = np.array([0.0, -self.SEGMENT_LENGTHS['pelvis']/2.0, 0.0])
             
             # ============================================================
             # Forward Kinematics: rotate local directions to global frame

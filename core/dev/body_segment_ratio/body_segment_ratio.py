@@ -31,7 +31,9 @@ class BodySegmentRatioPredictor:
     UPPERARM_COL = "075. 위팔길이"
     LOWERARM_COL = "095. 아래팔수평길이(팔굽힌)"
     HEAD_COL = "107. 머리수직길이"
-    
+    PELVIS_COL = "022. 엉덩이너비"
+    SHOULDER_WIDTH_COL = "088. 어깨사이너비"
+
     def __init__(self, file_path: str = None):
         """
         Load data and train linear regression models.
@@ -75,12 +77,15 @@ class BodySegmentRatioPredictor:
         upperarm_col = self.UPPERARM_COL.strip()
         lowerarm_col = self.LOWERARM_COL.strip()
         head_col = self.HEAD_COL.strip()
+        pelvis_col = self.PELVIS_COL.strip()
+        shoulder_width_col = self.SHOULDER_WIDTH_COL.strip()
 
         use_cols = [
             height_col, shoulder_col, waist_col, hip_col,
             knee_col, ankle_col, foot_col,
             chest_col, back_col,
-            upperarm_col, lowerarm_col, head_col
+            upperarm_col, lowerarm_col, head_col,
+            pelvis_col, shoulder_width_col
         ]
         missing = [c for c in use_cols if c not in df_raw.columns]
         if missing:
@@ -107,6 +112,8 @@ class BodySegmentRatioPredictor:
         df["upperarm_len"] = df[upperarm_col]
         df["lowerarm_len"] = df[lowerarm_col]
         df["head_len"] = df[head_col]
+        df["pelvis_width"] = df[pelvis_col]
+        df["shoulder_width"] = df[shoulder_width_col]
         
         # Remove outliers where length is negative or zero
         df = df[
@@ -129,6 +136,8 @@ class BodySegmentRatioPredictor:
         df["upperarm_ratio"] = df["upperarm_len"] / df[height_col]
         df["lowerarm_ratio"] = df["lowerarm_len"] / df[height_col]
         df["head_ratio"] = df["head_len"] / df[height_col]
+        df["pelvis_ratio"] = df["pelvis_width"] / df[height_col]
+        df["shoulder_width_ratio"] = df["shoulder_width"] / df[height_col]
 
         self.df = df
 
@@ -178,7 +187,9 @@ class BodySegmentRatioPredictor:
         #    (height, foot_length) -> each ratio
         # ========================================
         targets = ["trunk_ratio", "thigh_ratio", "shank_ratio", "foot_ratio",
-                   "chest_ratio", "abdomen_ratio", "upperarm_ratio", "lowerarm_ratio", "head_ratio"]
+                   "chest_ratio", "abdomen_ratio", "upperarm_ratio", "lowerarm_ratio", "head_ratio",
+                   "pelvis_ratio", "shoulder_width_ratio"
+                   ]
         
         for t in targets:
             model = LinearRegression()
@@ -219,6 +230,8 @@ class BodySegmentRatioPredictor:
             "upperarm_ratio": round(float(self.models["upperarm_ratio"].predict(X_input)[0]), 3),
             "lowerarm_ratio": round(float(self.models["lowerarm_ratio"].predict(X_input)[0]), 3),
             "head_ratio": round(float(self.models["head_ratio"].predict(X_input)[0]), 3),
+            "pelvis_ratio": round(float(self.models["pelvis_ratio"].predict(X_input)[0]), 3),
+            "shoulder_width_ratio": round(float(self.models["shoulder_width_ratio"].predict(X_input)[0]), 3),
         }
     
     def predict_segment_lengths(self, height: float, foot_length: float) -> Dict[str, float]:
@@ -248,6 +261,8 @@ class BodySegmentRatioPredictor:
             "upperarm_len_mm": round(height * ratios["upperarm_ratio"], 1),
             "lowerarm_len_mm": round(height * ratios["lowerarm_ratio"], 1),
             "head_len_mm": round(height * ratios["head_ratio"], 1),
+            "pelvis_width_mm": round(height * ratios["pelvis_ratio"], 1),
+            "shoulder_width_mm": round(height * ratios["shoulder_width_ratio"], 1),
             **ratios,
         }
 

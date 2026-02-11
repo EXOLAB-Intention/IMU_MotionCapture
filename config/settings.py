@@ -71,6 +71,8 @@ class SubjectConfig:
     abdomen_ratio: float = 0.190
     chest_ratio: float = 0.150
     head_ratio: float = 0.100
+    shoulder_ratio: float = 0.350
+    pelvis_ratio: float = 0.250
 
 
 @dataclass
@@ -167,7 +169,9 @@ class AppSettings:
             'chest': self.subject.chest_ratio,
             'head': self.subject.head_ratio,  # Approximate head height
             'upperarm': self.subject.upperarm_ratio,
-            'lowerarm': self.subject.lowerarm_ratio
+            'lowerarm': self.subject.lowerarm_ratio,
+            'shoulder': self.subject.shoulder_ratio,
+            'pelvis': self.subject.pelvis_ratio,
         }
         return self.subject.height * ratios.get(segment, 0.0)
     
