@@ -295,8 +295,33 @@ class GraphView(QWidget):
     
     def _export_graph(self):
         """Export graph to image file"""
-        # TODO: Implement graph export
-        print("Export graph functionality to be implemented")
+        if not MATPLOTLIB_AVAILABLE or not self.current_data:
+            return
+        
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        
+        # Determine default filename based on view mode
+        if self.view_mode == 'joint':
+            joint = self.joint_combo.currentText().lower()
+            default_name = f"{joint}_angles.png"
+        else:
+            default_name = "gait_analysis.png"
+        
+        # Get save file path
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Graph",
+            default_name,
+            "PNG Image (*.png);;JPEG Image (*.jpg *.jpeg);;SVG Vector (*.svg);;PDF Document (*.pdf);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                # Save with high DPI for better quality
+                self.figure.savefig(file_path, dpi=300, bbox_inches='tight', facecolor='white')
+                QMessageBox.information(self, "Export Successful", f"Graph exported to:\n{file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Failed", f"Error exporting graph:\n{str(e)}")
     
     def clear(self):
         """Clear graph"""

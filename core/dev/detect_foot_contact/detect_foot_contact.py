@@ -430,7 +430,7 @@ def compute_reference_values(
 
 def main():
     """Test with CSV file or sample data"""
-    csv_file = r"D:\Documents\KAIST\개별연구\IMU_MotionCapture\HEB_20260126\HEB_20260126_walk_01_processed.csv"
+    csv_file = r"KTY_20260122\KTY_walk_01_processed.csv"
     
     # Frame range for contact ratio calculation
     calculation_frame_start = 2000
