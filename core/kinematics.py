@@ -13,6 +13,7 @@ import numpy as np
 from typing import Tuple, List, Optional, Dict
 
 from core.imu_data import MotionCaptureData, JointAngles
+from core.segment_positions import compute_joint_positions, compute_walking_direction
 
 import pandas as pd
 
@@ -154,7 +155,7 @@ class KinematicsProcessor:
         accel_threshold_weight: float = 0.2,
         gyro_threshold: float = 0.5,
         window_size: int = 10,
-        min_contact_duration: int = 20
+        min_contact_duration: int = 40
     ) -> Tuple[int, int, np.ndarray, np.ndarray]:
         """
         Detect foot contact events using IMU acceleration and gyroscope
@@ -410,37 +411,20 @@ class KinematicsProcessor:
             
             if both_contact:
                 # Rule 1: Remove simultaneous contact
-                # Keep the foot that contacted earlier (look back to find which one contacted first)
-                if i == start_frame:
-                    # At start, keep both or arbitrarily choose one (keep right)
-                    pass
+                # Keep the foot that was already in single support just before this frame.
+                last_single = None
+                for j in range(i - 1, start_frame - 1, -1):
+                    if right[j] != left[j]:
+                        last_single = 'right' if right[j] else 'left'
+                        break
+
+                if last_single == 'right':
+                    left[i] = False
+                elif last_single == 'left':
+                    right[i] = False
                 else:
-                    # Find which foot broke contact first before this frame
-                    # by looking backward for the most recent contact change
-                    right_contact_frame = -1
-                    left_contact_frame = -1
-                    
-                    for j in range(i - 1, start_frame - 1, -1):
-                        if not right[j] and right_contact_frame == -1:
-                            right_contact_frame = j
-                        if not left[j] and left_contact_frame == -1:
-                            left_contact_frame = j
-                        if right_contact_frame != -1 and left_contact_frame != -1:
-                            break
-                    
-                    # The foot that broke contact later should be kept contacting
-                    # (i.e., the one with larger frame index of non-contact)
-                    if right_contact_frame > left_contact_frame:
-                        # Right broke contact more recently, so it re-established first
-                        # Keep right, remove left
-                        left[i] = False
-                    elif left_contact_frame > right_contact_frame:
-                        # Left broke contact more recently, so it re-established first
-                        # Keep left, remove right
-                        right[i] = False
-                    else:
-                        # Both broke contact at same frame - shouldn't happen, keep right
-                        left[i] = False
+                    # Fallback: keep right if no prior single support found
+                    left[i] = False
             
             elif both_notcontact:
                 # Rule 2: Remove simultaneous non-contact
@@ -516,8 +500,114 @@ class KinematicsProcessor:
         
         return stride_times_right, stride_times_left
     
-    # Additional helper functions to be implemented
+    def stride_distance(
+        self,
+        data: MotionCaptureData,
+        foot_contact_right: np.ndarray,
+        foot_contact_left: np.ndarray,
+        timestamps: np.ndarray,
+        segment_lengths: Optional[Dict[str, float]] = None
+    ) -> Tuple[List[float], List[int], List[str]]:
+        """
+        Compute stride distances based on foot contact transitions.
+
+        Args:
+            data: Motion capture data
+            foot_contact_right: Right foot contact boolean array
+            foot_contact_left: Left foot contact boolean array
+            timestamps: Time array (used for length alignment)
+            segment_lengths: Optional segment lengths (meters)
+
+        Returns:
+            Tuple of (stride_distances, stride_transitions, stride_sides)
+            stride_transitions are switch frame indices.
+            stride_sides are 'right' or 'left' for the new contact foot.
+        """
+        n_samples = min(len(timestamps), len(foot_contact_right), len(foot_contact_left))
+        if n_samples == 0:
+            return [], [], []
+
+        right = np.asarray(foot_contact_right[:n_samples], dtype=bool)
+        left = np.asarray(foot_contact_left[:n_samples], dtype=bool)
+
+        def current_contact_foot(index: int) -> Optional[str]:
+            if right[index] and not left[index]:
+                return 'right'
+            if left[index] and not right[index]:
+                return 'left'
+            return None
+
+        stride_distances: List[float] = []
+        stride_transitions: List[int] = []
+        stride_sides: List[str] = []
+
+        last_contact_foot = None
+        last_switch_frame = None
+        last_valid_dir = None
+
+        for i in range(n_samples):
+            contact_foot = current_contact_foot(i)
+            if contact_foot is None:
+                continue
+            last_contact_foot = contact_foot
+            last_switch_frame = i
+            break
+
+        if last_contact_foot is None or last_switch_frame is None:
+            return stride_distances, stride_transitions, stride_sides
+
+        for i in range(last_switch_frame + 1, n_samples):
+            contact_foot = current_contact_foot(i)
+            if contact_foot is None or contact_foot == last_contact_foot:
+                continue
+
+            walking_dir = compute_walking_direction(data, i)
+            if walking_dir is None:
+                if last_valid_dir is None:
+                    last_contact_foot = contact_foot
+                    last_switch_frame = i
+                    continue
+                walking_dir = last_valid_dir
+            else:
+                last_valid_dir = walking_dir
+
+            positions = compute_joint_positions(data, i, segment_lengths)
+            if not positions:
+                last_contact_foot = contact_foot
+                last_switch_frame = i
+                continue
+
+            foot_right_center = (positions['toe_right'] + positions['ankle_right']) / 2
+            foot_left_center = (positions['toe_left'] + positions['ankle_left']) / 2
+
+            prev_pos = foot_right_center if last_contact_foot == 'right' else foot_left_center
+            new_pos = foot_right_center if contact_foot == 'right' else foot_left_center
+
+            delta = new_pos - prev_pos
+            delta[2] = 0.0
+
+            direction = walking_dir.copy()
+            direction[2] = 0.0
+            dir_norm = np.linalg.norm(direction[:2])
+            if dir_norm < 1e-8:
+                last_contact_foot = contact_foot
+                last_switch_frame = i
+                continue
+            direction = direction / dir_norm
+
+            stride_distance = abs(delta[0] * direction[0] + delta[1] * direction[1])
+            stride_distances.append(float(stride_distance))
+            stride_transitions.append(i)
+            stride_sides.append(contact_foot)
+
+            last_contact_foot = contact_foot
+            last_switch_frame = i
+
+        return stride_distances, stride_transitions, stride_sides
     
+    # ==================================================
+    # Quaternion utility functions
+    # =================================================
     @staticmethod
     def quaternion_normalize(q: np.ndarray) -> np.ndarray:
         """

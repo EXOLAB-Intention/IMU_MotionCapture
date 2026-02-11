@@ -2,8 +2,8 @@
 Graph view widget for displaying time-series joint angles
 """
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QComboBox, QCheckBox, QPushButton, QSplitter
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QComboBox, QCheckBox, QPushButton, QSplitter, QButtonGroup
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 import numpy as np
@@ -27,6 +27,7 @@ class GraphView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_data = None
+        self.view_mode = 'joint'
         self._init_ui()
     
     def _init_ui(self):
@@ -37,6 +38,21 @@ class GraphView(QWidget):
         header_layout = QHBoxLayout()
         header_label = QLabel("<b>Joint Angles</b>")
         
+        # View mode selection
+        self.joint_view_btn = QPushButton("Joint View")
+        self.joint_view_btn.setCheckable(True)
+        self.joint_view_btn.setChecked(True)
+        self.joint_view_btn.clicked.connect(lambda: self._set_view_mode('joint'))
+
+        self.gait_view_btn = QPushButton("Gait View")
+        self.gait_view_btn.setCheckable(True)
+        self.gait_view_btn.clicked.connect(lambda: self._set_view_mode('gait'))
+
+        view_group = QButtonGroup(self)
+        view_group.setExclusive(True)
+        view_group.addButton(self.joint_view_btn)
+        view_group.addButton(self.gait_view_btn)
+
         # Joint selection
         self.joint_combo = QComboBox()
         self.joint_combo.addItems(['Hip', 'Knee', 'Ankle'])
@@ -57,6 +73,9 @@ class GraphView(QWidget):
         
         header_layout.addWidget(header_label)
         header_layout.addStretch()
+        header_layout.addWidget(self.joint_view_btn)
+        header_layout.addWidget(self.gait_view_btn)
+        header_layout.addSpacing(10)
         header_layout.addWidget(QLabel("Joint:"))
         header_layout.addWidget(self.joint_combo)
         header_layout.addWidget(self.right_check)
@@ -69,13 +88,10 @@ class GraphView(QWidget):
         if MATPLOTLIB_AVAILABLE:
             self.figure = Figure(figsize=(8, 6))
             self.canvas = FigureCanvasQTAgg(self.figure)
-            
-            # Create subplots for 3 DOF
+
             self.axes = []
-            for i in range(3):
-                ax = self.figure.add_subplot(3, 1, i + 1)
-                self.axes.append(ax)
-            
+            self._configure_axes()
+
             self.figure.tight_layout()
             layout.addWidget(self.canvas)
         else:
@@ -91,55 +107,191 @@ class GraphView(QWidget):
         self.current_data = motion_data
         self._update_graph()
     
+    def _configure_axes(self):
+        """Configure axes based on current view mode."""
+        self.figure.clear()
+        self.axes = []
+
+        if self.view_mode == 'joint':
+            for i in range(3):
+                ax = self.figure.add_subplot(3, 1, i + 1)
+                self.axes.append(ax)
+        else:
+            for i in range(3):
+                ax = self.figure.add_subplot(3, 1, i + 1)
+                self.axes.append(ax)
+
+    def _set_view_mode(self, mode: str):
+        """Switch between joint and gait views."""
+        if mode == self.view_mode:
+            return
+        self.view_mode = mode
+        if MATPLOTLIB_AVAILABLE:
+            self._configure_axes()
+            self._update_graph()
+
     def _update_graph(self):
         """Update graph based on current selections"""
         if not MATPLOTLIB_AVAILABLE or not self.current_data:
             return
-        
-        if not self.current_data.joint_angles:
-            return
-        
-        # Get selected joint
-        joint = self.joint_combo.currentText().lower()
-        
+
+        if self.view_mode == 'joint':
+            self._update_joint_view()
+        else:
+            self._update_gait_view()
+
+        self.figure.tight_layout()
+        self.canvas.draw()
+
+    def _update_joint_view(self):
+        """Render joint angle plots."""
         # Clear axes
         for ax in self.axes:
             ax.clear()
-        
-        # Plot data
+
+        if not self.current_data.joint_angles:
+            for ax in self.axes:
+                ax.text(0.5, 0.5, 'No joint angle data', ha='center', va='center', transform=ax.transAxes)
+                ax.grid(True, alpha=0.3)
+            return
+
+        joint = self.joint_combo.currentText().lower()
         timestamps = self.current_data.joint_angles.timestamps
-        
         dof_labels = ['Flexion/Extension', 'Abduction/Adduction', 'Internal/External Rotation']
-        
-        # Plot right side
+
         if self.right_check.isChecked():
             angles_right = self.current_data.joint_angles.get_joint_angle(joint, 'right')
             if angles_right is not None:
                 for i, ax in enumerate(self.axes):
                     ax.plot(timestamps, angles_right[:, i], 'r-', label='Right', linewidth=2)
-        
-        # Plot left side
+
         if self.left_check.isChecked():
             angles_left = self.current_data.joint_angles.get_joint_angle(joint, 'left')
             if angles_left is not None:
                 for i, ax in enumerate(self.axes):
                     ax.plot(timestamps, angles_left[:, i], 'b-', label='Left', linewidth=2)
-        
-        # Format axes
+
         for i, ax in enumerate(self.axes):
             ax.set_ylabel(f'{dof_labels[i]}\n(deg)', fontsize=10)
             ax.grid(True, alpha=0.3)
             ax.legend(loc='upper right')
-            
+
             if i < 2:
                 ax.set_xticklabels([])
             else:
                 ax.set_xlabel('Time (s)', fontsize=10)
-        
+
         self.axes[0].set_title(f'{joint.capitalize()} Joint Angles', fontsize=12, fontweight='bold')
-        
-        self.figure.tight_layout()
-        self.canvas.draw()
+
+    def _update_gait_view(self):
+        """Render stride distance, gait speed, and foot contact plots."""
+        for ax in self.axes:
+            ax.clear()
+
+        if not self.current_data.imu_data:
+            for ax in self.axes:
+                ax.text(0.5, 0.5, 'No data loaded', ha='center', va='center', transform=ax.transAxes)
+                ax.grid(True, alpha=0.3)
+            return
+
+        first_sensor = next(iter(self.current_data.imu_data.values()))
+        timestamps = first_sensor.timestamps
+
+        stride_ax = self.axes[0]
+        speed_ax = self.axes[1]
+        contact_ax = self.axes[2]
+
+        stride_ax.set_ylabel('Stride\n(m)', fontsize=10)
+        stride_ax.grid(True, alpha=0.3)
+
+        speed_ax.set_ylabel('Speed\n(m/s)', fontsize=10)
+        speed_ax.grid(True, alpha=0.3)
+
+        contact_ax.set_ylabel('Foot Contact', fontsize=10)
+        contact_ax.set_xlabel('Time (s)', fontsize=10)
+        contact_ax.grid(True, alpha=0.3)
+        contact_ax.set_ylim(-1.2, 1.2)
+        contact_ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        contact_ax.set_yticks([-1, 0, 1])
+        contact_ax.set_yticklabels(['Right', '', 'Left'])
+
+        stride_distances = []
+        stride_transitions = []
+        stride_sides = []
+
+        from core.kinematics import KinematicsProcessor
+
+        kinematics = KinematicsProcessor()
+        try:
+            _, _, foot_right, foot_left = kinematics.detect_foot_contact(self.current_data)
+        except Exception:
+            foot_right, foot_left = None, None
+
+        if foot_right is not None and foot_left is not None:
+            stride_distances, stride_transitions, stride_sides = kinematics.stride_distance(
+                self.current_data,
+                foot_right,
+                foot_left,
+                timestamps
+            )
+
+        if stride_distances and stride_transitions:
+            stride_times = timestamps[stride_transitions]
+            stride_times = np.asarray(stride_times)
+            stride_distances = np.asarray(stride_distances)
+            stride_sides = np.asarray(stride_sides)
+
+            right_mask = stride_sides == 'right'
+            left_mask = stride_sides == 'left'
+
+            if np.any(right_mask):
+                stride_ax.plot(
+                    stride_times[right_mask],
+                    stride_distances[right_mask],
+                    'ro',
+                    markersize=4,
+                    label='Right'
+                )
+
+            if np.any(left_mask):
+                stride_ax.plot(
+                    stride_times[left_mask],
+                    stride_distances[left_mask],
+                    'bo',
+                    markersize=4,
+                    label='Left'
+                )
+
+            stride_ax.legend(loc='upper right')
+        else:
+            stride_ax.text(0.5, 0.5, 'No stride data', ha='center', va='center', transform=stride_ax.transAxes)
+
+        if self.current_data.kinematics and self.current_data.kinematics.trunk_speed is not None:
+            speed_ax.plot(timestamps, self.current_data.kinematics.trunk_speed, 'g-', linewidth=1.5)
+        else:
+            speed_ax.text(0.5, 0.5, 'No gait speed data', ha='center', va='center', transform=speed_ax.transAxes)
+
+        # Plot foot contact using fill_between (like visualization.py)
+        if foot_right is not None and foot_left is not None:
+            foot_right = np.asarray(foot_right, dtype=bool)
+            foot_left = np.asarray(foot_left, dtype=bool)
+            
+            # Align to timestamps length
+            n_frames = len(timestamps)
+            foot_right = foot_right[:n_frames]
+            foot_left = foot_left[:n_frames]
+            
+            # Left foot: positive (0 to 1)
+            if np.any(foot_left):
+                contact_ax.fill_between(timestamps, 0, foot_left.astype(int), alpha=0.6, color='blue', label='Left Contact')
+            
+            # Right foot: negative (0 to -1)
+            if np.any(foot_right):
+                contact_ax.fill_between(timestamps, 0, -foot_right.astype(int), alpha=0.6, color='red', label='Right Contact')
+            if np.any(foot_left) or np.any(foot_right):
+                contact_ax.legend(loc='upper right', fontsize=9)
+        else:
+            contact_ax.text(0.5, 0.5, 'No foot contact data', ha='center', va='center', transform=contact_ax.transAxes)
     
     def _export_graph(self):
         """Export graph to image file"""

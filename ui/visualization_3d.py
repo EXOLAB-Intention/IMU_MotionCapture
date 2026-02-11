@@ -7,6 +7,7 @@ from PyQt5.QtCore import pyqtSignal, QTimer, Qt
 import numpy as np
 
 from config.settings import app_settings
+from core.segment_positions import compute_joint_positions
 
 try:
     import pyqtgraph as pg
@@ -66,6 +67,7 @@ class Visualization3D(QWidget):
         self.skeleton_items = {}
         self.joint_items = {}
         self.axis_items = {}  # Segment coordinate axes
+        self.foot_markers = {}  # XY foot contact markers
         self.grid = None  # Grid item for ground plane
         self.grid_scale = 0.4  # Store grid scale (larger for better visibility)
         
@@ -334,10 +336,13 @@ class Visualization3D(QWidget):
         for axes in self.axis_items.values():
             for axis in axes:
                 self.view_widget.removeItem(axis)
+        for marker in self.foot_markers.values():
+            self.view_widget.removeItem(marker)
         
         self.skeleton_items.clear()
         self.joint_items.clear()
         self.axis_items.clear()
+        self.foot_markers.clear()
         
         # Define segments and their colors
         segments = {
@@ -405,6 +410,23 @@ class Visualization3D(QWidget):
             self.view_widget.addItem(z_axis)
             
             self.axis_items[segment_name] = [x_axis, y_axis, z_axis]
+
+        # Foot contact markers (XY projection)
+        self.foot_markers['right'] = gl.GLScatterPlotItem(
+            pos=np.empty((0, 3)),
+            size=8,
+            color=(1.0, 0.0, 0.0, 1.0),
+            pxMode=True
+        )
+        self.view_widget.addItem(self.foot_markers['right'])
+
+        self.foot_markers['left'] = gl.GLScatterPlotItem(
+            pos=np.empty((0, 3)),
+            size=8,
+            color=(0.2, 0.6, 1.0, 1.0),
+            pxMode=True
+        )
+        self.view_widget.addItem(self.foot_markers['left'])
     
     def _render_frame(self, frame_index: int):
         """
@@ -439,126 +461,21 @@ class Visualization3D(QWidget):
         
         # Update grid position based on foot contact
         self._update_grid_position(frame_index, positions)
+
+        # Update XY foot contact markers on the grid
+        self._update_foot_markers(frame_index, positions)
         
         # Emit signal AFTER all updates complete (only if not updating from external source)
         if not self._updating:
             self.frame_changed.emit(frame_index)
     
     def _calculate_joint_positions(self, frame_index: int) -> dict:
-        """
-        Calculate 3D positions of all joints using forward kinematics.
-        
-        Global coordinate system: X=forward, Y=left, Z=up
-        
-        UNIFIED IMU attachment directions (sensor local frame):
-        All segments now use the same coordinate system after calibration:
-        - trunk:       x-up, y-right, z-forward (walking direction)
-        - thigh/shank: x-up, y-right, z-forward
-        - foot:        x-up, y-right, z-forward
-        
-        After N-pose calibration with unified q_desired, the calibrated quaternion
-        represents the rotation FROM sensor's local frame TO global frame.
-        
-        So to get segment direction in global frame:
-        - trunk: local +X (up) → apply q_trunk
-        - thigh: local -X (down, since x-up and leg goes down) → apply q_thigh
-        - shank: local -X (down) → apply q_shank
-        - foot:  local +Z (forward, following walking direction) → apply q_foot
-        """
-        positions = {}
-        
-        hip_pos = np.array([0.0, 0.0, 1.0])
-        positions['hip'] = hip_pos
-        
-        def get_quaternion(segment_name: str) -> np.ndarray:
-            if segment_name in self.current_data.imu_data:
-                q = self.current_data.imu_data[segment_name].quaternions[frame_index]
-                return q / np.linalg.norm(q)
-            return np.array([1.0, 0.0, 0.0, 0.0])
-        
-        q_trunk = get_quaternion('trunk')
-        q_thigh_r = get_quaternion('thigh_right')
-        q_thigh_l = get_quaternion('thigh_left')
-        q_shank_r = get_quaternion('shank_right')
-        q_shank_l = get_quaternion('shank_left')
-        q_foot_r = get_quaternion('foot_right')
-        q_foot_l = get_quaternion('foot_left')
-        
-        def rotate_vector(v: np.ndarray, q: np.ndarray) -> np.ndarray:
-            """Apply quaternion rotation to a vector."""
-            w, x, y, z = q
-            R = np.array([
-                [1 - 2*(y*y + z*z),     2*(x*y - w*z),     2*(x*z + w*y)],
-                [    2*(x*y + w*z), 1 - 2*(x*x + z*z),     2*(y*z - w*x)],
-                [    2*(x*z - w*y),     2*(y*z + w*x), 1 - 2*(x*x + y*y)]
-            ])
-            return R @ v
-        
-        # ============================================================
-        # Segment direction vectors in IMU LOCAL coordinates
-        # These represent the segment's longitudinal axis in sensor frame
-        # All segments now have UNIFIED coordinate system (x-up, y-right, z-forward)
-        # ============================================================
-        
-        # trunk: IMU x-axis points UP along trunk → local +X is segment direction
-        trunk_local_dir = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
-        
-        # thigh/shank: IMU x-axis points UP, but leg points DOWN → local -X is segment direction
-        thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
-        shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
-        
-        # foot: IMU z-axis points FORWARD → local +Z is segment direction
-        foot_local_dir = np.array([0.0, 0.0, self.SEGMENT_LENGTHS['foot']])
-        
-        # Hip offsets in trunk's local frame
-        # With unified coordinate system: y-right, so right hip is +Y, left hip is -Y
-        rhip_local_offset = np.array([0.0, 0.15, 0.0])
-        lhip_local_offset = np.array([0.0, -0.15, 0.0])
-        
-        # ============================================================
-        # Forward Kinematics: rotate local directions to global frame
-        # ============================================================
-        
-        # Trunk
-        trunk_dir = rotate_vector(trunk_local_dir, q_trunk)
-        trunk_top = hip_pos + trunk_dir
-        positions['trunk_top'] = trunk_top
-        
-        # Hip joints (offset from pelvis center using trunk orientation)
-        rhip_offset = rotate_vector(rhip_local_offset, q_trunk)
-        lhip_offset = rotate_vector(lhip_local_offset, q_trunk)
-        rhip_pos = hip_pos + rhip_offset
-        lhip_pos = hip_pos + lhip_offset
-        positions['rhip'] = rhip_pos
-        positions['lhip'] = lhip_pos
-        
-        # Right leg chain
-        thigh_r_dir = rotate_vector(thigh_local_dir, q_thigh_r)
-        knee_r_pos = rhip_pos + thigh_r_dir
-        positions['knee_right'] = knee_r_pos
-        
-        shank_r_dir = rotate_vector(shank_local_dir, q_shank_r)
-        ankle_r_pos = knee_r_pos + shank_r_dir
-        positions['ankle_right'] = ankle_r_pos
-        
-        foot_r_dir = rotate_vector(foot_local_dir, q_foot_r)
-        toe_r_pos = ankle_r_pos + foot_r_dir
-        positions['toe_right'] = toe_r_pos
-        
-        # Left leg chain
-        thigh_l_dir = rotate_vector(thigh_local_dir, q_thigh_l)
-        knee_l_pos = lhip_pos + thigh_l_dir
-        positions['knee_left'] = knee_l_pos
-        
-        shank_l_dir = rotate_vector(shank_local_dir, q_shank_l)
-        ankle_l_pos = knee_l_pos + shank_l_dir
-        positions['ankle_left'] = ankle_l_pos
-        
-        foot_l_dir = rotate_vector(foot_local_dir, q_foot_l)
-        toe_l_pos = ankle_l_pos + foot_l_dir
-        positions['toe_left'] = toe_l_pos
-        
-        return positions
+        """Calculate 3D positions of all joints using forward kinematics."""
+        return compute_joint_positions(
+            self.current_data,
+            frame_index,
+            segment_lengths=self.SEGMENT_LENGTHS
+        )
         
     def _update_skeleton(self, positions: dict):
         """Update skeleton graphics with new joint positions"""
@@ -747,6 +664,35 @@ class Visualization3D(QWidget):
         self.grid.resetTransform()
         self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
         self.grid.translate(grid_translate_x, grid_translate_y, self.grid_offset[2])
+
+    def _update_foot_markers(self, frame_index: int, positions: dict):
+        """Update XY foot contact markers on the grid."""
+        if not PYQTGRAPH_AVAILABLE or not self.foot_markers:
+            return
+
+        if self.foot_contact_right is None or self.foot_contact_left is None:
+            return
+
+        if frame_index >= len(self.foot_contact_right) or frame_index >= len(self.foot_contact_left):
+            return
+
+        foot_right_center = (positions['toe_right'] + positions['ankle_right']) / 2
+        foot_left_center = (positions['toe_left'] + positions['ankle_left']) / 2
+
+        right_pos = foot_right_center.copy()
+        right_pos[2] = 0.0
+        left_pos = foot_left_center.copy()
+        left_pos[2] = 0.0
+
+        if self.foot_contact_right[frame_index]:
+            self.foot_markers['right'].setData(pos=np.array([right_pos]))
+        else:
+            self.foot_markers['right'].setData(pos=np.empty((0, 3)))
+
+        if self.foot_contact_left[frame_index]:
+            self.foot_markers['left'].setData(pos=np.array([left_pos]))
+        else:
+            self.foot_markers['left'].setData(pos=np.empty((0, 3)))
     
     def _toggle_playback(self):
         """Toggle play/pause"""
