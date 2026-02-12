@@ -211,16 +211,16 @@ class GraphView(QWidget):
         trunk_angles = self.current_data.kinematics.trunk_angle
         timestamps = self.current_data.kinematics.timestamps
 
-        # Stored order is [roll, pitch, yaw]; display as yaw, roll, pitch
-        series = [trunk_angles[:, 2], trunk_angles[:, 0], trunk_angles[:, 1]]
+        # Stored order is [roll(x), pitch(y), yaw(z)] in local frame
+        # Map local -> global: x -> z, y -> -y, z -> x
+        # Display order: Yaw, Roll, Pitch (global frame)
+        series = [trunk_angles[:, 0], trunk_angles[:, 2], -trunk_angles[:, 1]]
         labels = ['Yaw', 'Roll', 'Pitch']
 
         for i, ax in enumerate(self.axes):
             if len(series[i]) > 0:
-                # Unwrap to avoid 0/180 deg flips, then zero at start
-                unwrapped = np.degrees(np.unwrap(np.radians(series[i])))
-                unwrapped = unwrapped - unwrapped[0]
-                series[i] = unwrapped
+                # Unwrap to avoid 0/180 deg flips, keep measured values
+                series[i] = np.degrees(np.unwrap(np.radians(series[i])))
             ax.plot(timestamps, series[i], 'k-', label='Trunk')
             ax.set_ylabel(f'{labels[i]}\n(deg)', fontsize=10)
             ax.grid(True, alpha=0.3)
@@ -404,7 +404,11 @@ class GraphView(QWidget):
                 return
             
             # Build DataFrame
-            data_dict = {'Timestamp': self.current_data.joint_angles.timestamps}
+            if self.current_data.kinematics and self.current_data.kinematics.timestamps is not None:
+                timestamps = self.current_data.kinematics.timestamps
+            else:
+                timestamps = self.current_data.joint_angles.timestamps
+            data_dict = {'Timestamp': timestamps}
             
             # Add selected items
             for item in selected_items:
@@ -433,20 +437,20 @@ class GraphView(QWidget):
                     data_dict['L_Ankle_Abduction'] = self.current_data.joint_angles.ankle_left[:, 1]
                     data_dict['L_Ankle_Rotation'] = self.current_data.joint_angles.ankle_left[:, 2]
                 elif item == 'Trunk':
-                    # Unwrap trunk angles to handle 0/180 deg flips, like in graph view
+                    # Unwrap trunk angles and map local -> global like in graph view
                     trunk_angles = self.current_data.kinematics.trunk_angle
-                    yaw_unwrapped = np.degrees(np.unwrap(np.radians(trunk_angles[:, 2]))) - np.degrees(np.unwrap(np.radians(trunk_angles[:, 2])))[0]
-                    roll_unwrapped = np.degrees(np.unwrap(np.radians(trunk_angles[:, 0]))) - np.degrees(np.unwrap(np.radians(trunk_angles[:, 0])))[0]
-                    pitch_unwrapped = np.degrees(np.unwrap(np.radians(trunk_angles[:, 1]))) - np.degrees(np.unwrap(np.radians(trunk_angles[:, 1])))[0]
-                    data_dict['Trunk_Yaw'] = yaw_unwrapped
-                    data_dict['Trunk_Roll'] = roll_unwrapped
-                    data_dict['Trunk_Pitch'] = pitch_unwrapped
+                    roll_global = np.degrees(np.unwrap(np.radians(trunk_angles[:, 2])))
+                    yaw_global = np.degrees(np.unwrap(np.radians(trunk_angles[:, 0])))
+                    pitch_global = -np.degrees(np.unwrap(np.radians(trunk_angles[:, 1])))
+                    data_dict['Trunk_Roll'] = roll_global
+                    data_dict['Trunk_Yaw'] = yaw_global
+                    data_dict['Trunk_Pitch'] = pitch_global
                 elif item == 'Stride':
                     # Stride is sparse - only at transition points
-                    stride_col = np.full(len(self.current_data.joint_angles.timestamps), np.nan)
+                    stride_col = np.full(len(timestamps), np.nan)
                     if self.current_data.kinematics.stride_times_right:
                         for stride_time in self.current_data.kinematics.stride_times_right:
-                            idx = np.argmin(np.abs(self.current_data.joint_angles.timestamps - stride_time))
+                            idx = np.argmin(np.abs(timestamps - stride_time))
                             stride_col[idx] = stride_time
                     data_dict['Stride_Right'] = stride_col
                 elif item == 'R_FootContact':

@@ -132,20 +132,44 @@ class KinematicsProcessor:
     
     def compute_trunk_angle(self, data: MotionCaptureData) -> np.ndarray:
         """
-        Compute trunk orientation relative to ground
+        Compute trunk orientation relative to the calibration (local) pose.
         
         Args:
             data: Motion capture data
             
         Returns:
-            (N, 3) array of trunk angles [pitch, roll, yaw] in degrees
+            (N, 3) array of trunk angles [roll, pitch, yaw] in degrees
         """
         if not data.imu_data:
             return None
-        n_samples = len(data.imu_data['trunk'].timestamps)
-    
-        q_trunk = data.imu_data['trunk'].quaternions  # (N,4)
-        trunk_angles = self.quaternion_to_euler(q_trunk)  # (N,3)
+
+        trunk_data = data.imu_data.get('trunk')
+        if trunk_data is None:
+            return None
+
+        q_trunk = trunk_data.quaternions  # (N,4)
+        timestamps = trunk_data.timestamps
+
+        # Use calibration pose window to define local reference quaternion
+        calib_start = data.calibration_start_time
+        calib_duration = data.calibration_duration
+        if calib_start is not None and calib_duration is not None:
+            calib_end = calib_start + calib_duration
+            calib_mask = (timestamps >= calib_start) & (timestamps <= calib_end)
+        else:
+            calib_mask = np.zeros(len(timestamps), dtype=bool)
+
+        if np.any(calib_mask):
+            calib_quats = q_trunk[calib_mask]
+            calib_quats = self.quaternion_normalize(calib_quats)
+            q_calib = self._average_quaternions(calib_quats)
+        else:
+            q_calib = self.quaternion_normalize(q_trunk[0])
+
+        q_calib_conj = self.quaternion_conjugate(q_calib)
+        q_trunk_norm = self.quaternion_normalize(q_trunk)
+        q_rel = self.quaternion_multiply(q_calib_conj, q_trunk_norm)
+        trunk_angles = self.quaternion_to_euler(q_rel)  # (N,3)
         return trunk_angles
     
     def detect_foot_contact(
@@ -635,6 +659,34 @@ class KinematicsProcessor:
             return q / norms
         else:
             raise ValueError("Input must have shape (4,) or (N,4)")
+
+    @staticmethod
+    def _average_quaternions(quaternions: np.ndarray) -> np.ndarray:
+        """
+        Average multiple quaternions using eigenvalue method.
+        
+        Args:
+            quaternions: (N, 4) array of quaternions [w, x, y, z]
+            
+        Returns:
+            Average quaternion [w, x, y, z]
+        """
+        if len(quaternions) == 0:
+            raise ValueError("No quaternions provided for averaging")
+
+        quats = np.asarray(quaternions, dtype=float)
+
+        # Ensure consistent hemisphere (all quaternions pointing same direction)
+        q0 = quats[0]
+        for i in range(1, len(quats)):
+            if np.dot(quats[i], q0) < 0:
+                quats[i] = -quats[i]
+
+        # Eigenvalue method for averaging
+        M = np.dot(quats.T, quats)
+        eigenvalues, eigenvectors = np.linalg.eigh(M)
+        avg_quat = eigenvectors[:, np.argmax(eigenvalues)]
+        return avg_quat / np.linalg.norm(avg_quat)
     
     @staticmethod
     def quaternion_conjugate(q: np.ndarray) -> np.ndarray:
