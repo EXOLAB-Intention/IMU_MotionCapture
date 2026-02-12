@@ -55,7 +55,7 @@ class GraphView(QWidget):
 
         # Joint selection
         self.joint_combo = QComboBox()
-        self.joint_combo.addItems(['Hip', 'Knee', 'Ankle'])
+        self.joint_combo.addItems(['Hip', 'Knee', 'Ankle', 'Trunk'])
         self.joint_combo.currentTextChanged.connect(self._update_graph)
         
         # Side selection
@@ -117,8 +117,8 @@ class GraphView(QWidget):
                 ax = self.figure.add_subplot(3, 1, i + 1)
                 self.axes.append(ax)
         else:
-            for i in range(3):
-                ax = self.figure.add_subplot(3, 1, i + 1)
+            for i in range(2):
+                ax = self.figure.add_subplot(2, 1, i + 1)
                 self.axes.append(ax)
 
     def _set_view_mode(self, mode: str):
@@ -149,13 +149,21 @@ class GraphView(QWidget):
         for ax in self.axes:
             ax.clear()
 
+        joint = self.joint_combo.currentText().lower()
+
+        if joint == 'trunk':
+            self._update_trunk_view()
+            return
+
+        self.right_check.setEnabled(True)
+        self.left_check.setEnabled(True)
+
         if not self.current_data.joint_angles:
             for ax in self.axes:
                 ax.text(0.5, 0.5, 'No joint angle data', ha='center', va='center', transform=ax.transAxes)
                 ax.grid(True, alpha=0.3)
             return
 
-        joint = self.joint_combo.currentText().lower()
         timestamps = self.current_data.joint_angles.timestamps
         dof_labels = ['Flexion/Extension', 'Abduction/Adduction', 'Internal/External Rotation']
 
@@ -163,13 +171,13 @@ class GraphView(QWidget):
             angles_right = self.current_data.joint_angles.get_joint_angle(joint, 'right')
             if angles_right is not None:
                 for i, ax in enumerate(self.axes):
-                    ax.plot(timestamps, angles_right[:, i], 'r-', label='Right', linewidth=2)
+                    ax.plot(timestamps, angles_right[:, i], 'r-', label='Right')
 
         if self.left_check.isChecked():
             angles_left = self.current_data.joint_angles.get_joint_angle(joint, 'left')
             if angles_left is not None:
                 for i, ax in enumerate(self.axes):
-                    ax.plot(timestamps, angles_left[:, i], 'b-', label='Left', linewidth=2)
+                    ax.plot(timestamps, angles_left[:, i], 'b-', label='Left')
 
         for i, ax in enumerate(self.axes):
             ax.set_ylabel(f'{dof_labels[i]}\n(deg)', fontsize=10)
@@ -182,6 +190,54 @@ class GraphView(QWidget):
                 ax.set_xlabel('Time (s)', fontsize=10)
 
         self.axes[0].set_title(f'{joint.capitalize()} Joint Angles', fontsize=12, fontweight='bold')
+
+    def _update_trunk_view(self):
+        """Render trunk orientation plots (yaw, roll, pitch)."""
+        self.right_check.setEnabled(False)
+        self.left_check.setEnabled(False)
+
+        if not self.current_data.kinematics or self.current_data.kinematics.trunk_angle is None:
+            for ax in self.axes:
+                ax.text(0.5, 0.5, 'No trunk orientation data', ha='center', va='center', transform=ax.transAxes)
+                ax.grid(True, alpha=0.3)
+            return
+
+        trunk_angles = self.current_data.kinematics.trunk_angle
+        timestamps = self.current_data.kinematics.timestamps
+
+        # Stored order is [roll, pitch, yaw]; display as yaw, roll, pitch
+        series = [trunk_angles[:, 2], trunk_angles[:, 0], trunk_angles[:, 1]]
+        labels = ['Yaw', 'Roll', 'Pitch']
+
+        for i, ax in enumerate(self.axes):
+            if len(series[i]) > 0:
+                # Unwrap to avoid 0/180 deg flips, then zero at start
+                unwrapped = np.degrees(np.unwrap(np.radians(series[i])))
+                unwrapped = unwrapped - unwrapped[0]
+                series[i] = unwrapped
+            ax.plot(timestamps, series[i], 'k-', label='Trunk')
+            ax.set_ylabel(f'{labels[i]}\n(deg)', fontsize=10)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='upper right')
+
+            if len(series[i]) > 0:
+                y_min = np.min(series[i])
+                y_max = np.max(series[i])
+                step = 360.0 if (y_max - y_min) >= 360.0 else 180.0
+                tick_start = step * np.floor(y_min / step)
+                tick_end = step * np.ceil(y_max / step)
+                if tick_start == tick_end:
+                    tick_start -= step
+                    tick_end += step
+                ticks = np.arange(tick_start, tick_end + step, step)
+                ax.set_yticks(ticks)
+
+            if i < 2:
+                ax.set_xticklabels([])
+            else:
+                ax.set_xlabel('Time (s)', fontsize=10)
+
+        self.axes[0].set_title('Trunk Orientation', fontsize=12, fontweight='bold')
 
     def _update_gait_view(self):
         """Render stride distance, gait speed, and foot contact plots."""
@@ -198,14 +254,10 @@ class GraphView(QWidget):
         timestamps = first_sensor.timestamps
 
         stride_ax = self.axes[0]
-        speed_ax = self.axes[1]
-        contact_ax = self.axes[2]
+        contact_ax = self.axes[1]
 
         stride_ax.set_ylabel('Stride\n(m)', fontsize=10)
         stride_ax.grid(True, alpha=0.3)
-
-        speed_ax.set_ylabel('Speed\n(m/s)', fontsize=10)
-        speed_ax.grid(True, alpha=0.3)
 
         contact_ax.set_ylabel('Foot Contact', fontsize=10)
         contact_ax.set_xlabel('Time (s)', fontsize=10)
@@ -266,11 +318,6 @@ class GraphView(QWidget):
         else:
             stride_ax.text(0.5, 0.5, 'No stride data', ha='center', va='center', transform=stride_ax.transAxes)
 
-        if self.current_data.kinematics and self.current_data.kinematics.trunk_speed is not None:
-            speed_ax.plot(timestamps, self.current_data.kinematics.trunk_speed, 'g-', linewidth=1.5)
-        else:
-            speed_ax.text(0.5, 0.5, 'No gait speed data', ha='center', va='center', transform=speed_ax.transAxes)
-
         # Plot foot contact using fill_between (like visualization.py)
         if foot_right is not None and foot_left is not None:
             foot_right = np.asarray(foot_right, dtype=bool)
@@ -288,8 +335,6 @@ class GraphView(QWidget):
             # Right foot: negative (0 to -1)
             if np.any(foot_right):
                 contact_ax.fill_between(timestamps, 0, -foot_right.astype(int), alpha=0.6, color='red', label='Right Contact')
-            if np.any(foot_left) or np.any(foot_right):
-                contact_ax.legend(loc='upper right', fontsize=9)
         else:
             contact_ax.text(0.5, 0.5, 'No foot contact data', ha='center', va='center', transform=contact_ax.transAxes)
     
@@ -303,7 +348,10 @@ class GraphView(QWidget):
         # Determine default filename based on view mode
         if self.view_mode == 'joint':
             joint = self.joint_combo.currentText().lower()
-            default_name = f"{joint}_angles.png"
+            if joint == 'trunk':
+                default_name = "trunk_orientation.png"
+            else:
+                default_name = f"{joint}_angles.png"
         else:
             default_name = "gait_analysis.png"
         

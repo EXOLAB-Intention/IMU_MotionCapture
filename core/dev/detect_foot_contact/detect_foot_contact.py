@@ -430,7 +430,7 @@ def compute_reference_values(
 
 def main():
     """Test with CSV file or sample data"""
-    csv_file = r"KTY_20260122\KTY_walk_01_processed.csv"
+    csv_file = r"HEB_20260126\HEB_20260126_walk_01_processed.csv"
     
     # Frame range for contact ratio calculation
     calculation_frame_start = 2000
@@ -450,8 +450,10 @@ def main():
             'L_FOOT': 10.0,
             'R_FOOT': 10.0,
         }
-        accel_threshold_weight = 0.2
-        gyro_threshold = 0.5
+        val_accel_threshold_weight = 0.2
+        val_gyro_threshold = 0.5
+        val_window_size = 10
+        val_min_contact_duration = 40
         
         # Detect foot contact for both feet using modified detect_foot_contact logic
         # First, detect raw contact for each foot
@@ -459,9 +461,13 @@ def main():
         for foot in accelerations.keys():
             a_thr = accel_thresholds.get(foot)
             foot_contact_raw[foot] = _detect_contact_single(
-                accelerations[foot], gyroscopes[foot],
-                a_thr, accel_threshold_weight, gyro_threshold,
-                window_size=10, min_contact_duration=40
+                accelerations=accelerations[foot],
+                gyroscopes=gyroscopes[foot],
+                accel_threshold=a_thr,
+                accel_threshold_weight=val_accel_threshold_weight,
+                gyro_threshold=val_gyro_threshold,
+                window_size=val_window_size,
+                min_contact_duration=val_min_contact_duration
             )
         
         # Process gait cycle to get gait frames and modified contact arrays
@@ -483,8 +489,8 @@ def main():
         
         plot_results(timestamps, accelerations, gyroscopes, foot_contact,
                     accel_threshold=accel_thresholds,
-                    accel_threshold_weight=accel_threshold_weight,
-                    gyro_threshold=gyro_threshold,
+                    accel_threshold_weight=val_accel_threshold_weight,
+                    gyro_threshold=val_gyro_threshold,
                     frame_start=calculation_frame_start,
                     frame_end=calculation_frame_end)
     except Exception as e:
