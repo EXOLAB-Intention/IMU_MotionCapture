@@ -3,10 +3,12 @@ Graph view widget for displaying time-series joint angles
 """
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QComboBox, QCheckBox, QPushButton, QSplitter, QButtonGroup
+    QComboBox, QCheckBox, QPushButton, QSplitter, QButtonGroup,
+    QDialog, QMessageBox, QFileDialog, QGroupBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 import numpy as np
+import pandas as pd
 
 try:
     import matplotlib
@@ -67,9 +69,12 @@ class GraphView(QWidget):
         self.left_check.setChecked(True)
         self.left_check.stateChanged.connect(self._update_graph)
         
-        # Export button
-        export_btn = QPushButton("Export")
-        export_btn.clicked.connect(self._export_graph)
+        # Export buttons
+        export_graph_btn = QPushButton("Export Graph")
+        export_graph_btn.clicked.connect(self._export_graph)
+        
+        export_csv_btn = QPushButton("Export CSV")
+        export_csv_btn.clicked.connect(self._export_csv)
         
         header_layout.addWidget(header_label)
         header_layout.addStretch()
@@ -80,7 +85,8 @@ class GraphView(QWidget):
         header_layout.addWidget(self.joint_combo)
         header_layout.addWidget(self.right_check)
         header_layout.addWidget(self.left_check)
-        header_layout.addWidget(export_btn)
+        header_layout.addWidget(export_graph_btn)
+        header_layout.addWidget(export_csv_btn)
         
         layout.addLayout(header_layout)
         
@@ -343,8 +349,6 @@ class GraphView(QWidget):
         if not MATPLOTLIB_AVAILABLE or not self.current_data:
             return
         
-        from PyQt5.QtWidgets import QFileDialog, QMessageBox
-        
         # Determine default filename based on view mode
         if self.view_mode == 'joint':
             joint = self.joint_combo.currentText().lower()
@@ -371,6 +375,93 @@ class GraphView(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Export Failed", f"Error exporting graph:\n{str(e)}")
     
+    def _export_csv(self):
+        """Export selected data columns to CSV"""
+        if not self.current_data:
+            QMessageBox.warning(self, "No Data", "No data loaded to export.")
+            return
+        
+        # Show selection dialog
+        dialog = ExportCSVDialog(self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        
+        selected_items = dialog.get_selected_items()
+        if not selected_items:
+            QMessageBox.warning(self, "No Selection", "Please select at least one item to export.")
+            return
+        
+        try:
+            # Get save file path
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export CSV",
+                "motion_data.csv",
+                "CSV Files (*.csv);;All Files (*)"
+            )
+            
+            if not file_path:
+                return
+            
+            # Build DataFrame
+            data_dict = {'Timestamp': self.current_data.joint_angles.timestamps}
+            
+            # Add selected items
+            for item in selected_items:
+                if item == 'R_Hip':
+                    data_dict['R_Hip_Flexion'] = self.current_data.joint_angles.hip_right[:, 0]
+                    data_dict['R_Hip_Abduction'] = self.current_data.joint_angles.hip_right[:, 1]
+                    data_dict['R_Hip_Rotation'] = self.current_data.joint_angles.hip_right[:, 2]
+                elif item == 'L_Hip':
+                    data_dict['L_Hip_Flexion'] = self.current_data.joint_angles.hip_left[:, 0]
+                    data_dict['L_Hip_Abduction'] = self.current_data.joint_angles.hip_left[:, 1]
+                    data_dict['L_Hip_Rotation'] = self.current_data.joint_angles.hip_left[:, 2]
+                elif item == 'R_Knee':
+                    data_dict['R_Knee_Flexion'] = self.current_data.joint_angles.knee_right[:, 0]
+                    data_dict['R_Knee_Abduction'] = self.current_data.joint_angles.knee_right[:, 1]
+                    data_dict['R_Knee_Rotation'] = self.current_data.joint_angles.knee_right[:, 2]
+                elif item == 'L_Knee':
+                    data_dict['L_Knee_Flexion'] = self.current_data.joint_angles.knee_left[:, 0]
+                    data_dict['L_Knee_Abduction'] = self.current_data.joint_angles.knee_left[:, 1]
+                    data_dict['L_Knee_Rotation'] = self.current_data.joint_angles.knee_left[:, 2]
+                elif item == 'R_Ankle':
+                    data_dict['R_Ankle_Flexion'] = self.current_data.joint_angles.ankle_right[:, 0]
+                    data_dict['R_Ankle_Abduction'] = self.current_data.joint_angles.ankle_right[:, 1]
+                    data_dict['R_Ankle_Rotation'] = self.current_data.joint_angles.ankle_right[:, 2]
+                elif item == 'L_Ankle':
+                    data_dict['L_Ankle_Flexion'] = self.current_data.joint_angles.ankle_left[:, 0]
+                    data_dict['L_Ankle_Abduction'] = self.current_data.joint_angles.ankle_left[:, 1]
+                    data_dict['L_Ankle_Rotation'] = self.current_data.joint_angles.ankle_left[:, 2]
+                elif item == 'Trunk':
+                    # Unwrap trunk angles to handle 0/180 deg flips, like in graph view
+                    trunk_angles = self.current_data.kinematics.trunk_angle
+                    yaw_unwrapped = np.degrees(np.unwrap(np.radians(trunk_angles[:, 2]))) - np.degrees(np.unwrap(np.radians(trunk_angles[:, 2])))[0]
+                    roll_unwrapped = np.degrees(np.unwrap(np.radians(trunk_angles[:, 0]))) - np.degrees(np.unwrap(np.radians(trunk_angles[:, 0])))[0]
+                    pitch_unwrapped = np.degrees(np.unwrap(np.radians(trunk_angles[:, 1]))) - np.degrees(np.unwrap(np.radians(trunk_angles[:, 1])))[0]
+                    data_dict['Trunk_Yaw'] = yaw_unwrapped
+                    data_dict['Trunk_Roll'] = roll_unwrapped
+                    data_dict['Trunk_Pitch'] = pitch_unwrapped
+                elif item == 'Stride':
+                    # Stride is sparse - only at transition points
+                    stride_col = np.full(len(self.current_data.joint_angles.timestamps), np.nan)
+                    if self.current_data.kinematics.stride_times_right:
+                        for stride_time in self.current_data.kinematics.stride_times_right:
+                            idx = np.argmin(np.abs(self.current_data.joint_angles.timestamps - stride_time))
+                            stride_col[idx] = stride_time
+                    data_dict['Stride_Right'] = stride_col
+                elif item == 'R_FootContact':
+                    data_dict['R_FootContact'] = self.current_data.kinematics.foot_contact_right.astype(int)
+                elif item == 'L_FootContact':
+                    data_dict['L_FootContact'] = self.current_data.kinematics.foot_contact_left.astype(int)
+            
+            # Create DataFrame and save
+            df = pd.DataFrame(data_dict)
+            df.to_csv(file_path, index=False)
+            
+            QMessageBox.information(self, "Export Successful", f"Data exported to:\n{file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Error exporting CSV:\n{str(e)}")
+    
     def clear(self):
         """Clear graph"""
         if MATPLOTLIB_AVAILABLE:
@@ -378,3 +469,99 @@ class GraphView(QWidget):
                 ax.clear()
             self.canvas.draw()
         self.current_data = None
+
+
+class ExportCSVDialog(QDialog):
+    """Dialog for selecting CSV export items"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Export CSV - Select Items")
+        self.setMinimumWidth(400)
+        self.check_items = {}
+        self._init_ui()
+    
+    def _init_ui(self):
+        """Initialize UI"""
+        layout = QVBoxLayout()
+        
+        # Joint angles section
+        joint_group = QGroupBox("Joint Angles")
+        joint_layout = QVBoxLayout()
+        
+        for joint in ['R_Hip', 'L_Hip', 'R_Knee', 'L_Knee', 'R_Ankle', 'L_Ankle']:
+            cb = QCheckBox(joint)
+            self.check_items[joint] = cb
+            joint_layout.addWidget(cb)
+        
+        joint_group.setLayout(joint_layout)
+        layout.addWidget(joint_group)
+        
+        # Trunk section
+        trunk_group = QGroupBox("Trunk")
+        trunk_layout = QVBoxLayout()
+        
+        trunk_cb = QCheckBox("Trunk (Yaw, Roll, Pitch)")
+        self.check_items['Trunk'] = trunk_cb
+        trunk_layout.addWidget(trunk_cb)
+        
+        trunk_group.setLayout(trunk_layout)
+        layout.addWidget(trunk_group)
+        
+        # Gait section
+        gait_group = QGroupBox("Gait")
+        gait_layout = QVBoxLayout()
+        
+        stride_cb = QCheckBox("Stride Distance")
+        self.check_items['Stride'] = stride_cb
+        gait_layout.addWidget(stride_cb)
+        
+        for contact in ['R_FootContact', 'L_FootContact']:
+            cb = QCheckBox(contact)
+            self.check_items[contact] = cb
+            gait_layout.addWidget(cb)
+        
+        gait_group.setLayout(gait_layout)
+        layout.addWidget(gait_group)
+        
+        # Select All / Deselect All buttons
+        button_layout = QHBoxLayout()
+        
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.clicked.connect(self._select_all)
+        button_layout.addWidget(select_all_btn)
+        
+        deselect_all_btn = QPushButton("Deselect All")
+        deselect_all_btn.clicked.connect(self._deselect_all)
+        button_layout.addWidget(deselect_all_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Dialog buttons
+        dialog_button_layout = QHBoxLayout()
+        
+        export_btn = QPushButton("Export")
+        export_btn.clicked.connect(self.accept)
+        dialog_button_layout.addWidget(export_btn)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        dialog_button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(dialog_button_layout)
+        
+        self.setLayout(layout)
+    
+    def _select_all(self):
+        """Check all items"""
+        for cb in self.check_items.values():
+            cb.setChecked(True)
+    
+    def _deselect_all(self):
+        """Uncheck all items"""
+        for cb in self.check_items.values():
+            cb.setChecked(False)
+    
+    def get_selected_items(self):
+        """Get list of selected items"""
+        return [name for name, cb in self.check_items.items() if cb.isChecked()]
