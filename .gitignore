@@ -83,3 +83,6 @@ env/
 *.mcp
 *.cal
 *.subject
+
+# Ignore dataset directory
+data/
