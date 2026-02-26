@@ -3,7 +3,7 @@
 Provides interactive 3D skeleton rendering with smooth playback
 """
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QSlider
-from PyQt5.QtCore import pyqtSignal, QTimer, Qt
+from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot
 import numpy as np
 
 from config.settings import app_settings
@@ -33,6 +33,14 @@ class Visualization3D(QWidget):
     # Signals
     frame_changed = pyqtSignal(int)  # current frame index
     
+    # Segment lengths (meters) - approximate human proportions
+    SEGMENT_LENGTHS = {
+        'trunk': 0.50,     # Torso height
+        'thigh': 0.40,     # Hip to knee
+        'shank': 0.42,     # Knee to ankle
+        'foot': 0.25,      # Ankle to toe
+    }
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_data = None
@@ -46,9 +54,17 @@ class Visualization3D(QWidget):
         # Segment lengths (meters) - initialized from settings
         self.SEGMENT_LENGTHS = {
             'trunk': 0.50,     # Torso height
+            'pelvis': 0.45,    # Pelvis width
             'thigh': 0.40,     # Hip to knee
             'shank': 0.42,     # Knee to ankle
             'foot': 0.25,      # Ankle to toe
+            # Upper body segments can be added similarly
+            'abdomen': 0.25,     # Pelvis to chest
+            'chest': 0.20,       # Chest to head
+            'head': 0.20,        # Head height
+            'shoulder': 0.45,   # Shoulder width
+            'upperarm': 0.25,  # Shoulder to elbow
+            'lowerarm': 0.25   # Elbow to wrist
         }
         
         # Load initial segment lengths from settings
@@ -153,17 +169,31 @@ class Visualization3D(QWidget):
         try:
             # Get segment lengths from settings (in cm, converted to m)
             self.SEGMENT_LENGTHS['trunk'] = app_settings.get_segment_length('trunk') / 100.0
+            self.SEGMENT_LENGTHS['pelvis'] = app_settings.get_segment_length('pelvis') / 100.0
             self.SEGMENT_LENGTHS['thigh'] = app_settings.get_segment_length('thigh') / 100.0
             self.SEGMENT_LENGTHS['shank'] = app_settings.get_segment_length('shank') / 100.0
             self.SEGMENT_LENGTHS['foot'] = app_settings.get_segment_length('foot') / 100.0
+            self.SEGMENT_LENGTHS['abdomen'] = app_settings.get_segment_length('abdomen') / 100.0
+            self.SEGMENT_LENGTHS['chest'] = app_settings.get_segment_length('chest') / 100.0
+            self.SEGMENT_LENGTHS['head'] = app_settings.get_segment_length('head') / 100.0
+            self.SEGMENT_LENGTHS['shoulder'] = app_settings.get_segment_length('shoulder') / 100.0
+            self.SEGMENT_LENGTHS['upperarm'] = app_settings.get_segment_length('upperarm') / 100.0
+            self.SEGMENT_LENGTHS['lowerarm'] = app_settings.get_segment_length('lowerarm') / 100.0
         except Exception as e:
             # Fallback to default values if settings not available
             print(f"Warning: Could not load segment lengths from settings: {e}")
             self.SEGMENT_LENGTHS = {
                 'trunk': 0.50,
+                'pelvis': 0.45,
                 'thigh': 0.40,
                 'shank': 0.42,
                 'foot': 0.25,
+                'abdomen': 0.35,
+                'chest': 0.25,
+                'head': 0.20,
+                'shoulder': 0.40,
+                'upperarm': 0.30,
+                'lowerarm': 0.25
             }
     
     def update_segment_lengths(self, subject_info: dict):
@@ -178,15 +208,30 @@ class Visualization3D(QWidget):
             
             # Get ratios
             trunk_ratio = subject_info.get('trunk_ratio', 0.288)
+            pelvis_ratio = subject_info.get('pelvis_ratio', 0.250)
             thigh_ratio = subject_info.get('thigh_ratio', 0.232)
             shank_ratio = subject_info.get('shank_ratio', 0.246)
             foot_ratio = subject_info.get('foot_ratio', 0.152)
+            # Upper body ratios
+            abdomen_ratio = subject_info.get('abdomen_ratio', 0.190)
+            chest_ratio = subject_info.get('chest_ratio', 0.150)
+            head_ratio = subject_info.get('head_ratio', 0.100)
+            shoulder_ratio = subject_info.get('shoulder_ratio', 0.350)
+            upperarm_ratio = subject_info.get('upperarm_ratio', 0.186)
+            lowerarm_ratio = subject_info.get('lowerarm_ratio', 0.146)
             
             # Calculate segment lengths (convert cm to m)
             self.SEGMENT_LENGTHS['trunk'] = (height * trunk_ratio) / 100.0
+            self.SEGMENT_LENGTHS['pelvis'] = (height * pelvis_ratio) / 100.0
             self.SEGMENT_LENGTHS['thigh'] = (height * thigh_ratio) / 100.0
             self.SEGMENT_LENGTHS['shank'] = (height * shank_ratio) / 100.0
             self.SEGMENT_LENGTHS['foot'] = (height * foot_ratio) / 100.0
+            self.SEGMENT_LENGTHS['abdomen'] = (height * abdomen_ratio) / 100.0
+            self.SEGMENT_LENGTHS['chest'] = (height * chest_ratio) / 100.0
+            self.SEGMENT_LENGTHS['head'] = (height * head_ratio) / 100.0
+            self.SEGMENT_LENGTHS['shoulder'] = (height * shoulder_ratio) / 100.0
+            self.SEGMENT_LENGTHS['upperarm'] = (height * upperarm_ratio) / 100.0
+            self.SEGMENT_LENGTHS['lowerarm'] = (height * lowerarm_ratio) / 100.0
             
             # If data is loaded, re-render current frame with new lengths
             if self.current_data is not None:
@@ -257,6 +302,13 @@ class Visualization3D(QWidget):
         else:
             self.frame_label.setText("Frame: 0 / 0")
             self.play_btn.setEnabled(False)
+
+    @pyqtSlot(str)
+    def refresh_view_mode(self, mode_name: str):
+        """ Refresh the 3D view when the mode changes (e.g., Lower-body to Upper-body) """
+        if self.current_data:
+            self._initialize_skeleton()
+            self._render_frame(self.current_frame)
     
     def set_foot_contact(self, gait_start_frame: int, gait_end_frame: int, 
                         foot_contact_right: np.ndarray, foot_contact_left: np.ndarray):
@@ -344,18 +396,35 @@ class Visualization3D(QWidget):
         self.axis_items.clear()
         self.foot_markers.clear()
         
-        # Define segments and their colors
-        segments = {
-            'trunk': (1.0, 1.0, 1.0, 1.0),      # White
-            'pelvis': (0.8, 0.8, 0.8, 1.0),     # Gray (connects left and right hip)
-            'thigh_right': (1.0, 0.3, 0.3, 1.0),  # Red
-            'thigh_left': (0.3, 0.3, 1.0, 1.0),   # Blue
-            'shank_right': (1.0, 0.5, 0.5, 1.0),  # Light red
-            'shank_left': (0.5, 0.5, 1.0, 1.0),   # Light blue
-            'foot_right': (1.0, 0.7, 0.7, 1.0),   # Lighter red
-            'foot_left': (0.7, 0.7, 1.0, 1.0),    # Lighter blue
-        }
-        
+        current_mode = app_settings.mode.mode_type
+        if current_mode == 'Upper-body':
+            segments = {
+                'abdomen': (1.0, 1.0, 1.0, 1.0),        # White
+                'chest': (0.8, 0.8, 0.8, 1.0),          # Gray
+                'head': (0.6, 0.6, 0.6, 1.0),           # Light Gray
+                'shoulder': (1.0, 1.0, 0.0, 1.0),       # Yellow (connects left and right shoulder)
+                'upperarm_right': (1.0, 0.3, 0.3, 1.0),  # Red
+                'upperarm_left': (0.3, 0.3, 1.0, 1.0),   # Blue
+                'lowerarm_right': (1.0, 0.5, 0.5, 1.0),  # Light red
+                'lowerarm_left': (0.5, 0.5, 1.0, 1.0),   # Light blue
+            }
+            joint_names = ['hip', 'spine', 'neck', 'rshoulder', 'lshoulder', 'elbow_right', 'elbow_left', 'wrist_right', 'wrist_left']
+            segment_names = ['pelvis', 'chest', 'head', 'upperarm_right', 'upperarm_left', 'lowerarm_right', 'lowerarm_left']
+        else:
+            # Define segments and their colors
+            segments = {
+                'trunk': (1.0, 1.0, 1.0, 1.0),      # White
+                'pelvis': (0.8, 0.8, 0.8, 1.0),     # Gray (connects left and right hip)
+                'thigh_right': (1.0, 0.3, 0.3, 1.0),  # Red
+                'thigh_left': (0.3, 0.3, 1.0, 1.0),   # Blue
+                'shank_right': (1.0, 0.5, 0.5, 1.0),  # Light red
+                'shank_left': (0.5, 0.5, 1.0, 1.0),   # Light blue
+                'foot_right': (1.0, 0.7, 0.7, 1.0),   # Lighter red
+                'foot_left': (0.7, 0.7, 1.0, 1.0),    # Lighter blue
+            }
+            joint_names = ['hip', 'rhip', 'lhip', 'knee_right', 'knee_left', 'ankle_right', 'ankle_left', 'toe_right', 'toe_left']
+            segment_names = ['trunk', 'thigh_right', 'thigh_left', 'shank_right', 'shank_left', 'foot_right', 'foot_left']
+
         # Create line items for each segment
         for segment_name, color in segments.items():
             line_item = gl.GLLinePlotItem(
@@ -368,7 +437,6 @@ class Visualization3D(QWidget):
             self.skeleton_items[segment_name] = line_item
         
         # Create joint spheres (including rhip, lhip)
-        joint_names = ['hip', 'rhip', 'lhip', 'knee_right', 'knee_left', 'ankle_right', 'ankle_left', 'toe_right', 'toe_left']
         for joint_name in joint_names:
             mesh = gl.MeshData.sphere(rows=10, cols=10, radius=0.03)
             joint_item = gl.GLMeshItem(
@@ -381,7 +449,6 @@ class Visualization3D(QWidget):
             self.joint_items[joint_name] = joint_item
         
         # Create coordinate axes for each segment
-        segment_names = ['trunk', 'thigh_right', 'thigh_left', 'shank_right', 'shank_left', 'foot_right', 'foot_left']
         for segment_name in segment_names:
             # X-axis (red)
             x_axis = gl.GLLinePlotItem(
@@ -470,29 +537,239 @@ class Visualization3D(QWidget):
             self.frame_changed.emit(frame_index)
     
     def _calculate_joint_positions(self, frame_index: int) -> dict:
-        """Calculate 3D positions of all joints using forward kinematics."""
-        return compute_joint_positions(
-            self.current_data,
-            frame_index,
-            segment_lengths=self.SEGMENT_LENGTHS
-        )
+        """
+        Calculate 3D positions of all joints using forward kinematics.
+        
+        Global coordinate system: X=forward, Y=left, Z=up
+        
+        UNIFIED IMU attachment directions (sensor local frame):
+        All segments now use the same coordinate system after calibration:
+        - trunk:       x-up, y-right, z-forward (walking direction)
+        - thigh/shank: x-up, y-right, z-forward
+        - foot:        x-up, y-right, z-forward
+        
+        After N-pose calibration with unified q_desired, the calibrated quaternion
+        represents the rotation FROM sensor's local frame TO global frame.
+        
+        So to get segment direction in global frame:
+        - trunk: local +X (up) → apply q_trunk
+        - thigh: local -X (down, since x-up and leg goes down) → apply q_thigh
+        - shank: local -X (down) → apply q_shank
+        - foot:  local +Z (forward, following walking direction) → apply q_foot
+        """
+        positions = {}
+        current_mode = app_settings.mode.mode_type
+        
+        hip_pos = np.array([0.0, 0.0, 1.0])
+        positions['hip'] = hip_pos
+        
+        def get_quaternion(segment_name: str) -> np.ndarray:
+            if segment_name in self.current_data.imu_data:
+                q = self.current_data.imu_data[segment_name].quaternions[frame_index]
+                return q / np.linalg.norm(q)
+            return np.array([1.0, 0.0, 0.0, 0.0])
+        
+        def rotate_vector(v: np.ndarray, q: np.ndarray) -> np.ndarray:
+            """Apply quaternion rotation to a vector."""
+            w, x, y, z = q
+            R = np.array([
+                [1 - 2*(y*y + z*z),     2*(x*y - w*z),     2*(x*z + w*y)],
+                [    2*(x*y + w*z), 1 - 2*(x*x + z*z),     2*(y*z - w*x)],
+                [    2*(x*z - w*y),     2*(y*z + w*x), 1 - 2*(x*x + y*y)]
+            ])
+            return R @ v
+        
+        if current_mode == 'Upper-body':
+            
+            q_pelvis = get_quaternion('pelvis')
+            q_chest = get_quaternion('chest')
+            q_head = get_quaternion('head')
+            q_upperarm_r = get_quaternion('upperarm_right')
+            q_upperarm_l = get_quaternion('upperarm_left')
+            q_lowerarm_r = get_quaternion('lowerarm_right')
+            q_lowerarm_l = get_quaternion('lowerarm_left')
+            
+            # ============================================================
+            # Segment direction vectors in IMU LOCAL coordinates
+            # These represent the segment's longitudinal axis in sensor frame
+            # ============================================================
+            
+            # trunk: IMU x-axis points UP along trunk → local +X is segment direction
+            abdomen_local_dir = np.array([self.SEGMENT_LENGTHS['abdomen'], 0.0, 0.0])
+            chest_local_dir = np.array([self.SEGMENT_LENGTHS['chest'], 0.0, 0.0])
+            head_local_dir = np.array([self.SEGMENT_LENGTHS['head'], 0.0, 0.0])
+            
+            # upperarm/lowerarm: IMU x-axis points UP, but arm points DOWN → local -X is segment direction
+            upperarm_r_local_dir = np.array([-self.SEGMENT_LENGTHS['upperarm'], 0.0, 0.0])
+            upperarm_l_local_dir = np.array([-self.SEGMENT_LENGTHS['upperarm'], 0.0, 0.0])
+            lowerarm_r_local_dir = np.array([-self.SEGMENT_LENGTHS['lowerarm'], 0.0, 0.0])
+            lowerarm_l_local_dir = np.array([-self.SEGMENT_LENGTHS['lowerarm'], 0.0, 0.0])
+            
+            # Shoulder offsets in chest's local frame (y-right means -Y is left)
+            # chest: y-right, so right shoulder offset is local -Y, left shoulder offset is local +Y
+            rshoulder_local_offset = np.array([0.0, self.SEGMENT_LENGTHS['shoulder']/2.0, 0.0])
+            lshoulder_local_offset = np.array([0.0, -self.SEGMENT_LENGTHS['shoulder']/2.0, 0.0])
+            
+            # ============================================================
+            # Forward Kinematics: rotate local directions to global frame
+            # ============================================================
+
+            # Abdomen (pelvis to chest)
+            abdomen_dir = rotate_vector(abdomen_local_dir, q_pelvis)
+            spine_pos = hip_pos + abdomen_dir
+            positions['spine'] = spine_pos
+
+            # Chest
+            chest_dir = rotate_vector(chest_local_dir, q_chest)
+            neck_pos = spine_pos + chest_dir
+            positions['neck'] = neck_pos
+
+            # Head (head height)
+            head_dir = rotate_vector(head_local_dir, q_head)
+            head_top = neck_pos + head_dir
+            positions['head'] = head_top
+
+            # Shoulders (offset from chest using chest orientation)
+            rshoulder_offset = rotate_vector(rshoulder_local_offset, q_chest)
+            lshoulder_offset = rotate_vector(lshoulder_local_offset, q_chest)
+            rshoulder_pos = neck_pos + rshoulder_offset
+            lshoulder_pos = neck_pos + lshoulder_offset
+            positions['rshoulder'] = rshoulder_pos
+            positions['lshoulder'] = lshoulder_pos
+
+            # Right arm chain
+            upperarm_r_dir = rotate_vector(upperarm_r_local_dir, q_upperarm_r)
+            elbow_r_pos = rshoulder_pos + upperarm_r_dir
+            positions['elbow_right'] = elbow_r_pos
+            
+            lowerarm_r_dir = rotate_vector(lowerarm_r_local_dir, q_lowerarm_r)
+            wrist_r_pos = elbow_r_pos + lowerarm_r_dir
+            positions['wrist_right'] = wrist_r_pos
+            
+            # Left arm chain
+            upperarm_l_dir = rotate_vector(upperarm_l_local_dir, q_upperarm_l)
+            elbow_l_pos = lshoulder_pos + upperarm_l_dir
+            positions['elbow_left'] = elbow_l_pos
+            
+            lowerarm_l_dir = rotate_vector(lowerarm_l_local_dir, q_lowerarm_l)
+            wrist_l_pos = elbow_l_pos + lowerarm_l_dir
+            positions['wrist_left'] = wrist_l_pos
+
+        else:
+            q_trunk = get_quaternion('trunk')
+            q_thigh_r = get_quaternion('thigh_right')
+            q_thigh_l = get_quaternion('thigh_left')
+            q_shank_r = get_quaternion('shank_right')
+            q_shank_l = get_quaternion('shank_left')
+            q_foot_r = get_quaternion('foot_right')
+            q_foot_l = get_quaternion('foot_left')
+            
+            
+            # ============================================================
+            # Segment direction vectors in IMU LOCAL coordinates
+            # These represent the segment's longitudinal axis in sensor frame
+            # All segments now have UNIFIED coordinate system (x-up, y-right, z-forward)
+            # ============================================================
+            
+            # trunk: IMU x-axis points UP along trunk → local +X is segment direction
+            trunk_local_dir = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
+            
+            # thigh/shank: IMU x-axis points UP, but leg points DOWN → local -X is segment direction
+            thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
+            shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
+            
+            # =======================================================================
+            # VRU-AHS
+            # =======================================================================
+            # foot: IMU x-axis points BACKWARD → local -X is segment direction
+            foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
+
+            # =======================================================================
+            # North Reference
+            # =======================================================================
+            # foot: IMU z-axis points FORWARD → local +Z is segment direction
+            # foot_local_dir = np.array([0.0, 0.0, self.SEGMENT_LENGTHS['foot']])
+            
+            # Hip offsets in trunk's local frame
+            # With unified coordinate system: y-right, so right hip is +Y, left hip is -Y
+            rhip_local_offset = np.array([0.0, self.SEGMENT_LENGTHS['pelvis']/2.0, 0.0])
+            lhip_local_offset = np.array([0.0, -self.SEGMENT_LENGTHS['pelvis']/2.0, 0.0])
+            
+            # ============================================================
+            # Forward Kinematics: rotate local directions to global frame
+            # ============================================================
+            
+            # Trunk
+            trunk_dir = rotate_vector(trunk_local_dir, q_trunk)
+            trunk_top = hip_pos + trunk_dir
+            positions['trunk_top'] = trunk_top
+            
+            # Hip joints (offset from pelvis center using trunk orientation)
+            rhip_offset = rotate_vector(rhip_local_offset, q_trunk)
+            lhip_offset = rotate_vector(lhip_local_offset, q_trunk)
+            rhip_pos = hip_pos + rhip_offset
+            lhip_pos = hip_pos + lhip_offset
+            positions['rhip'] = rhip_pos
+            positions['lhip'] = lhip_pos
+            
+            # Right leg chain
+            thigh_r_dir = rotate_vector(thigh_local_dir, q_thigh_r)
+            knee_r_pos = rhip_pos + thigh_r_dir
+            positions['knee_right'] = knee_r_pos
+            
+            shank_r_dir = rotate_vector(shank_local_dir, q_shank_r)
+            ankle_r_pos = knee_r_pos + shank_r_dir
+            positions['ankle_right'] = ankle_r_pos
+            
+            foot_r_dir = rotate_vector(foot_local_dir, q_foot_r)
+            toe_r_pos = ankle_r_pos + foot_r_dir
+            positions['toe_right'] = toe_r_pos
+            
+            # Left leg chain
+            thigh_l_dir = rotate_vector(thigh_local_dir, q_thigh_l)
+            knee_l_pos = lhip_pos + thigh_l_dir
+            positions['knee_left'] = knee_l_pos
+            
+            shank_l_dir = rotate_vector(shank_local_dir, q_shank_l)
+            ankle_l_pos = knee_l_pos + shank_l_dir
+            positions['ankle_left'] = ankle_l_pos
+            
+            foot_l_dir = rotate_vector(foot_local_dir, q_foot_l)
+            toe_l_pos = ankle_l_pos + foot_l_dir
+            positions['toe_left'] = toe_l_pos
+        
+        return positions
         
     def _update_skeleton(self, positions: dict):
         """Update skeleton graphics with new joint positions"""
         if not PYQTGRAPH_AVAILABLE:
             return
         
-        # Update segment lines
-        segments_to_draw = [
-            ('trunk', positions['hip'], positions['trunk_top']),
-            ('pelvis', positions['lhip'], positions['rhip']),  # Pelvis connects left and right hip
-            ('thigh_right', positions['rhip'], positions['knee_right']),
-            ('thigh_left', positions['lhip'], positions['knee_left']),
-            ('shank_right', positions['knee_right'], positions['ankle_right']),
-            ('shank_left', positions['knee_left'], positions['ankle_left']),
-            ('foot_right', positions['ankle_right'], positions['toe_right']),
-            ('foot_left', positions['ankle_left'], positions['toe_left']),
-        ]
+        current_mode = app_settings.mode.mode_type
+        if current_mode == 'Upper-body':
+            # Update segment lines
+            segments_to_draw = [
+                ('abdomen', positions['hip'], positions['spine']),
+                ('chest', positions['spine'], positions['neck']),
+                ('head', positions['neck'], positions['head']),
+                ('shoulder', positions['rshoulder'], positions['lshoulder']),  # Shoulder connects left and right shoulder
+                ('upperarm_right', positions['rshoulder'], positions['elbow_right']),
+                ('upperarm_left', positions['lshoulder'], positions['elbow_left']),
+                ('lowerarm_right', positions['elbow_right'], positions['wrist_right']),
+                ('lowerarm_left', positions['elbow_left'], positions['wrist_left']),
+            ]
+        else:
+            # Update segment lines
+            segments_to_draw = [
+                ('trunk', positions['hip'], positions['trunk_top']),
+                ('pelvis', positions['lhip'], positions['rhip']),  # Pelvis connects left and right hip
+                ('thigh_right', positions['rhip'], positions['knee_right']),
+                ('thigh_left', positions['lhip'], positions['knee_left']),
+                ('shank_right', positions['knee_right'], positions['ankle_right']),
+                ('shank_left', positions['knee_left'], positions['ankle_left']),
+                ('foot_right', positions['ankle_right'], positions['toe_right']),
+                ('foot_left', positions['ankle_left'], positions['toe_left']),
+            ]
         
         for segment_name, start_pos, end_pos in segments_to_draw:
             if segment_name in self.skeleton_items:
@@ -533,16 +810,28 @@ class Visualization3D(QWidget):
         axis_y_npose = np.array([0, axis_length, 0])
         axis_z_npose = np.array([0, 0, axis_length])
         
+        current_mode = app_settings.mode.mode_type
         # Define segment center positions and their quaternions
-        segment_configs = [
-            ('trunk', (positions['hip'] + positions['trunk_top']) / 2),
-            ('thigh_right', (positions['rhip'] + positions['knee_right']) / 2),
-            ('thigh_left', (positions['lhip'] + positions['knee_left']) / 2),
-            ('shank_right', (positions['knee_right'] + positions['ankle_right']) / 2),
-            ('shank_left', (positions['knee_left'] + positions['ankle_left']) / 2),
-            ('foot_right', (positions['ankle_right'] + positions['toe_right']) / 2),
-            ('foot_left', (positions['ankle_left'] + positions['toe_left']) / 2),
-        ]
+        if current_mode == 'Upper-body':
+            segment_configs = [
+                ('pelvis', (positions['hip'] + positions['spine']) / 2),
+                ('chest', (positions['spine'] + positions['neck']) / 2),
+                ('head', (positions['neck'] + positions['head']) / 2),
+                ('upperarm_right', (positions['rshoulder'] + positions['elbow_right']) / 2),
+                ('upperarm_left', (positions['lshoulder'] + positions['elbow_left']) / 2),
+                ('lowerarm_right', (positions['elbow_right'] + positions['wrist_right']) / 2),
+                ('lowerarm_left', (positions['elbow_left'] + positions['wrist_left']) / 2),
+            ]
+        else:
+            segment_configs = [
+                ('trunk', (positions['hip'] + positions['trunk_top']) / 2),
+                ('thigh_right', (positions['rhip'] + positions['knee_right']) / 2),
+                ('thigh_left', (positions['lhip'] + positions['knee_left']) / 2),
+                ('shank_right', (positions['knee_right'] + positions['ankle_right']) / 2),
+                ('shank_left', (positions['knee_left'] + positions['ankle_left']) / 2),
+                ('foot_right', (positions['ankle_right'] + positions['toe_right']) / 2),
+                ('foot_left', (positions['ankle_left'] + positions['toe_left']) / 2),
+            ]   
         
         for segment_name, center_pos in segment_configs:
             if segment_name not in self.axis_items:
@@ -578,6 +867,11 @@ class Visualization3D(QWidget):
             return
         
         if self.gait_start_frame is None or self.gait_end_frame is None:
+            return
+        
+        current_mode = app_settings.mode.mode_type
+        if current_mode == 'Upper-body':
+            # Grid movement not applicable in Upper-body mode
             return
         
         # Get foot center positions

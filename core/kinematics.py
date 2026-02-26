@@ -13,6 +13,7 @@ import numpy as np
 from typing import Tuple, List, Optional, Dict
 
 from core.imu_data import MotionCaptureData, JointAngles
+from config.settings import app_settings
 from core.segment_positions import compute_joint_positions, compute_walking_direction
 
 import pandas as pd
@@ -39,6 +40,11 @@ class KinematicsProcessor:
     
     def __init__(self):
         pass
+
+    @property
+    def current_mode(self) -> str:
+        """Return the current capture mode"""
+        return app_settings.mode.mode_type
     
     def compute_joint_angles(self, data: MotionCaptureData) -> JointAngles:
         """
@@ -52,6 +58,11 @@ class KinematicsProcessor:
             - Hip: trunk (proximal) → thigh (distal)
             - Knee: thigh (proximal) → shank (distal)  
             - Ankle: shank (proximal) → foot (distal)
+        Joint definitions (upper body):
+            - Spine: pelvis (proximal) → chest (distal)
+            - Neck: chest (proximal) → head (distal)
+            - Shoulder: chest (proximal) → upperarm (distal)
+            - Elbow: upperarm (proximal) → lowerarm (distal)
         
         Args:
             data: Calibrated motion capture data
@@ -65,8 +76,9 @@ class KinematicsProcessor:
             return None
         
         # 2. Set reference timestamp (trunk IMU timestamps)
-        n_samples = len(data.imu_data['trunk'].timestamps)
-        timestamps = data.imu_data['trunk'].timestamps
+        ref_sensor_name = 'trunk' if self.current_mode == 'Lower-body' else 'pelvis'
+        n_samples = len(data.imu_data[ref_sensor_name].timestamps)
+        timestamps = data.imu_data[ref_sensor_name].timestamps
 
         # 3. Helper function to calculate joint angle between two segments
         def calculate_joint_angle(proximal_name: str, distal_name: str) -> np.ndarray:
@@ -106,29 +118,58 @@ class KinematicsProcessor:
                 return np.zeros((n_samples, 3))
 
         # 4. Calculate joint angles for all joints
-        # Hip: Trunk (proximal) → Thigh (distal)
-        hip_right = calculate_joint_angle('trunk', 'thigh_right')
-        hip_left = calculate_joint_angle('trunk', 'thigh_left')
-        
-        # Knee: Thigh (proximal) → Shank (distal)
-        knee_right = calculate_joint_angle('thigh_right', 'shank_right')
-        knee_left = calculate_joint_angle('thigh_left', 'shank_left')
-        
-        # Ankle: Shank (proximal) → Foot (distal)
-        ankle_right = calculate_joint_angle('shank_right', 'foot_right')
-        ankle_left = calculate_joint_angle('shank_left', 'foot_left')
+        if self.current_mode == 'Upper-body':
+            # Spine: Pelvis (proximal) → Chest (distal)
+            spine = calculate_joint_angle('pelvis', 'chest')
+            
+            # Neck: Chest (proximal) → Head (distal)
+            neck = calculate_joint_angle('chest', 'head')
+            
+            # Shoulder: Chest (proximal) → Upperarm (distal)
+            shoulder_right = calculate_joint_angle('chest', 'upperarm_right')
+            shoulder_left = calculate_joint_angle('chest', 'upperarm_left')
+            
+            # Elbow: Upperarm (proximal) → Lowerarm (distal)
+            elbow_right = calculate_joint_angle('upperarm_right', 'lowerarm_right')
+            elbow_left = calculate_joint_angle('upperarm_left', 'lowerarm_left')
 
-        # 5. Create JointAngles object
-        joint_angles = JointAngles(
-            timestamps=timestamps,
-            hip_right=hip_right,
-            hip_left=hip_left,
-            knee_right=knee_right,
-            knee_left=knee_left,
-            ankle_right=ankle_right,
-            ankle_left=ankle_left
-        )
-        return joint_angles
+            # 5. Create JointAngles object
+            joint_angles = JointAngles(
+                timestamps=timestamps,
+                spine=spine,
+                neck=neck,
+                shoulder_right=shoulder_right,
+                shoulder_left=shoulder_left,
+                elbow_right=elbow_right,
+                elbow_left=elbow_left
+            )
+            return joint_angles
+        
+        # Lower-body joints
+        else:
+            # Hip: Trunk (proximal) → Thigh (distal)
+            hip_right = calculate_joint_angle('trunk', 'thigh_right')
+            hip_left = calculate_joint_angle('trunk', 'thigh_left')
+            
+            # Knee: Thigh (proximal) → Shank (distal)
+            knee_right = calculate_joint_angle('thigh_right', 'shank_right')
+            knee_left = calculate_joint_angle('thigh_left', 'shank_left')
+            
+            # Ankle: Shank (proximal) → Foot (distal)
+            ankle_right = calculate_joint_angle('shank_right', 'foot_right')
+            ankle_left = calculate_joint_angle('shank_left', 'foot_left')
+
+            # 5. Create JointAngles object
+            joint_angles = JointAngles(
+                timestamps=timestamps,
+                hip_right=hip_right,
+                hip_left=hip_left,
+                knee_right=knee_right,
+                knee_left=knee_left,
+                ankle_right=ankle_right,
+                ankle_left=ankle_left
+            )
+            return joint_angles
     
     def compute_trunk_angle(self, data: MotionCaptureData) -> np.ndarray:
         """
@@ -142,8 +183,10 @@ class KinematicsProcessor:
         """
         if not data.imu_data:
             return None
-
-        trunk_data = data.imu_data.get('trunk')
+        ref_sensor_name = 'trunk' if self.current_mode == 'Lower-body' else 'pelvis'
+        n_samples = len(data.imu_data[ref_sensor_name].timestamps)
+    
+        trunk_data = data.imu_data.get(ref_sensor_name)
         if trunk_data is None:
             return None
 
@@ -200,6 +243,8 @@ class KinematicsProcessor:
                 - foot_contact_right: Modified boolean array (no simultaneous contact/non-contact)
                 - foot_contact_left: Modified boolean array (no simultaneous contact/non-contact)
         """
+        if self.current_mode == 'Upper-body':
+            return (None, None, None, None)  # No foot contact detection in upper-body mode
         
         # Extract foot IMU data from MotionCaptureData
         # Expected structure: data.imu_data['foot_right'] and data.imu_data['foot_left']
@@ -494,7 +539,9 @@ class KinematicsProcessor:
             
         TODO: Implement velocity estimation algorithm
         """
-        n_samples = len(data.imu_data['trunk'].timestamps)
+        
+        ref_sensor_name = 'trunk' if self.current_mode == 'Lower-body' else 'pelvis'
+        n_samples = len(data.imu_data[ref_sensor_name].timestamps)
         trunk_velocity = np.zeros((n_samples, 3))
         trunk_speed = np.zeros(n_samples)
         

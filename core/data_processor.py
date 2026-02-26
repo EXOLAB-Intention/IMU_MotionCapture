@@ -44,7 +44,8 @@ class DataProcessor:
             data, 
             calibration_start, 
             calibration_end,
-            pose_type=app_settings.calibration.pose_type
+            pose_type=app_settings.calibration.pose_type,
+            mode=app_settings.mode.mode_type
         )
         
         data.calibration_start_time = calibration_start

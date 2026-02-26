@@ -6,9 +6,10 @@ from PyQt5.QtWidgets import (
     QComboBox, QCheckBox, QPushButton, QSplitter, QButtonGroup,
     QDialog, QMessageBox, QFileDialog, QGroupBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
 import numpy as np
 import pandas as pd
+from config.settings import app_settings
 
 try:
     import matplotlib
@@ -58,6 +59,7 @@ class GraphView(QWidget):
         # Joint selection
         self.joint_combo = QComboBox()
         self.joint_combo.addItems(['Hip', 'Knee', 'Ankle', 'Trunk'])
+        self.update_mode_selection()
         self.joint_combo.currentTextChanged.connect(self._update_graph)
         
         # Side selection
@@ -107,6 +109,36 @@ class GraphView(QWidget):
             layout.addWidget(placeholder)
         
         self.setLayout(layout)
+
+    @pyqtSlot(str)
+    def update_mode_selection(self, mode_name: str = None):
+        """Update joint selection options based on current mode"""
+        # Maintain current selection
+        current_text = self.joint_combo.currentText()
+        
+        # Block signals to avoid triggering updates
+        self.joint_combo.blockSignals(True)
+        self.joint_combo.clear()
+
+        # Check current mode
+        current_mode = app_settings.mode.mode_type
+
+        if current_mode == 'Upper-body':
+            # Upper body
+            joints = ['Spine', 'Neck', 'Shoulder', 'Elbow']
+        else:
+            # Lower body
+            joints = ['Hip', 'Knee', 'Ankle', 'Trunk']
+        self.joint_combo.addItems(joints)
+        
+        # Restore previous selection if still valid
+        if current_text in joints:
+            self.joint_combo.setCurrentText(current_text)
+        
+        self.joint_combo.blockSignals(False)
+        
+        # Update graph
+        self._update_graph()
     
     def set_data(self, motion_data):
         """Set motion capture data for visualization"""
@@ -172,24 +204,40 @@ class GraphView(QWidget):
 
         timestamps = self.current_data.joint_angles.timestamps
         dof_labels = ['Flexion/Extension', 'Abduction/Adduction', 'Internal/External Rotation']
+        
+        # Check if graph has been plotted
+        plotted_label = False
 
-        if self.right_check.isChecked():
-            angles_right = self.current_data.joint_angles.get_joint_angle(joint, 'right')
-            if angles_right is not None:
+        # Plot for joints without sides
+        if joint in ['spine', 'neck']:
+            angles = self.current_data.joint_angles.get_joint_angle(joint, '')
+            if angles is not None:
                 for i, ax in enumerate(self.axes):
-                    ax.plot(timestamps, angles_right[:, i], 'r-', label='Right')
-
-        if self.left_check.isChecked():
-            angles_left = self.current_data.joint_angles.get_joint_angle(joint, 'left')
-            if angles_left is not None:
-                for i, ax in enumerate(self.axes):
-                    ax.plot(timestamps, angles_left[:, i], 'b-', label='Left')
-
+                    ax.plot(timestamps, angles[:, i], 'g-', linewidth=2)
+        else:
+            # Plot right side
+            if self.right_check.isChecked():
+                angles_right = self.current_data.joint_angles.get_joint_angle(joint, 'right')
+                if angles_right is not None:
+                    for i, ax in enumerate(self.axes):
+                        ax.plot(timestamps, angles_right[:, i], 'r-', label='Right', linewidth=2)
+                    plotted_label = True
+            
+            # Plot left side
+            if self.left_check.isChecked():
+                angles_left = self.current_data.joint_angles.get_joint_angle(joint, 'left')
+                if angles_left is not None:
+                    for i, ax in enumerate(self.axes):
+                        ax.plot(timestamps, angles_left[:, i], 'b-', label='Left', linewidth=2)
+                    plotted_label = True
+        
+        # Format axes
         for i, ax in enumerate(self.axes):
             ax.set_ylabel(f'{dof_labels[i]}\n(deg)', fontsize=10)
             ax.grid(True, alpha=0.3)
-            ax.legend(loc='upper right')
-
+            if plotted_label:
+                ax.legend(loc='upper right', fontsize=8)
+            
             if i < 2:
                 ax.set_xticklabels([])
             else:

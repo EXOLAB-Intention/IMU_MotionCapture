@@ -133,6 +133,24 @@ class MainWindow(QMainWindow):
         
         # Main view signals
         self.main_view.process_requested.connect(self.process_data)
+        self.main_view.mode_changed.connect(self.update_mode)
+        self.main_view.mode_changed.connect(self.main_view.visualization_3d.refresh_view_mode)
+        self.main_view.mode_changed.connect(self.main_view.graph_view.update_mode_selection)
+        self.main_view.mode_changed.connect(self.subject_info.refresh_mode_ui)
+
+    @pyqtSlot(str)
+    def update_mode(self, mode_name: str):
+        """Update settings when switching mode"""
+        formatted_mode = "Upper-body" if mode_name == "Upper-body" else "Lower-body"
+        app_settings.mode.mode_type = formatted_mode
+        app_settings.refresh_sensor_mapping()
+        
+        self.statusBar().showMessage(f"Switched to {formatted_mode} mode", 3000)
+        self._update_calibration_status()
+        
+        # Check if current data matches mode
+        if self.current_data and not self.current_data.has_all_sensors:
+            self.statusBar().showMessage(f"Warning: Data incomplete for {formatted_mode}", 5000)
     
     @pyqtSlot(str)
     def import_file(self, filepath: str):
@@ -159,11 +177,12 @@ class MainWindow(QMainWindow):
             
             # Check if all sensors are present
             if not data.has_all_sensors:
+                current_mode = app_settings.mode.mode_type
                 QMessageBox.warning(
                     self,
                     "Incomplete Data",
-                    "Not all required sensors are present in the data.\n"
-                    "Expected 7 sensors for lower body."
+                    f"Not all required sensors are present for {current_mode} in the data.\n"
+                    f"Please check your sensor mapping and mode settings."
                 )
         
         except Exception as e:
@@ -301,12 +320,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Processing data (using existing calibration)...")
             
             # Apply calibration to data first (if not already applied)
-            calibrated_data = self.data_processor.calibration_processor.apply_to_data(
-                self.current_data
-            )
+            if not self.current_data.is_calibrated:
+                self.current_data = self.data_processor.calibration_processor.apply_to_data(
+                    self.current_data
+                )
             
             # Compute kinematics only (no calibration step)
-            processed_data = self.data_processor.process_kinematics_only(calibrated_data)
+            processed_data = self.data_processor.process_kinematics_only(self.current_data)
             
             self.current_data = processed_data
             
@@ -315,10 +335,11 @@ class MainWindow(QMainWindow):
             
             self.statusBar().showMessage("Processing complete", 3000)
             
+            current_mode = app_settings.mode.mode_type
             QMessageBox.information(
                 self,
                 "Processing Complete",
-                "Motion data has been processed successfully.\n\n"
+                f"{current_mode} motion data has been processed successfully.\n\n"
                 f"Calibration: {self.data_processor.calibration_processor.pose_type}\n"
                 "Joint angles and kinematics have been computed."
             )
@@ -443,6 +464,7 @@ class MainWindow(QMainWindow):
                 "Calibration Loaded",
                 f"Calibration loaded successfully!\n"
                 f"Pose type: {self.data_processor.calibration_processor.pose_type}\n"
+                f"mode: {self.data_processor.calibration_processor.mode}\n"
                 f"Sensors: {len(self.data_processor.calibration_processor.offset_quaternions)}"
             )
         
@@ -523,6 +545,8 @@ class MainWindow(QMainWindow):
             if not ok:
                 return
             
+            current_mode = app_settings.mode.mode_type
+
             self.statusBar().showMessage("Performing calibration...")
             
             # Perform calibration
@@ -530,7 +554,8 @@ class MainWindow(QMainWindow):
                 self.current_data,
                 start_time,
                 end_time,
-                pose_type
+                pose_type,
+                current_mode
             )
             
             self.statusBar().showMessage("Calibration complete", 3000)
@@ -542,6 +567,7 @@ class MainWindow(QMainWindow):
                 "Calibration Complete",
                 f"Calibration performed successfully!\n\n"
                 f"Pose type: {pose_type}\n"
+                f"mode: {current_mode}\n"
                 f"Time range: {start_time:.2f}s - {end_time:.2f}s ({range_source})\n"
                 f"Sensors calibrated: {len(self.data_processor.calibration_processor.offset_quaternions)}\n\n"
                 f"Now click 'Process > Process Data' to apply calibration."

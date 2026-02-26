@@ -430,7 +430,7 @@ def compute_reference_values(
 
 def main():
     """Test with CSV file or sample data"""
-    csv_file = r"HEB_20260126\HEB_20260126_walk_01_processed.csv"
+    csv_file = str(Path(__file__).parents[3] / "data" / "JJY_20260119" / "JJY_20260119_095340_walk_01_processed.csv")
     
     # Frame range for contact ratio calculation
     calculation_frame_start = 2000
