@@ -18,8 +18,8 @@ print("실제 IMU 데이터로 각도 계산 검증")
 print("="*70)
 
 # File paths
-npose_file = Path("PJS_20260119/PJS_20260119_Npose_processed.csv")
-motion_file = Path("PJS_20260119/PJS_20260119_walk_01_processed.csv")
+npose_file = Path("data/PJS_20260119/PJS_20260119_Npose_processed.csv")
+motion_file = Path("data/PJS_20260119/PJS_20260119_walk_01_processed.csv")
 
 if not npose_file.exists():
     print(f"❌ N-pose file not found: {npose_file}")

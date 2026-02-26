@@ -83,3 +83,6 @@ env/
 *.mcp
 *.cal
 *.subject
+
+# Data files
+data/

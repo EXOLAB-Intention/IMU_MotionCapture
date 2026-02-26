@@ -16,7 +16,7 @@ print("N-pose Calibration 테스트")
 print("="*70)
 
 # Load N-pose data
-npose_file = Path("PJS_20260119/PJS_20260119_Npose_processed.csv")
+npose_file = Path("data/PJS_20260119/PJS_20260119_Npose_processed.csv")
 if not npose_file.exists():
     print(f"❌ N-pose file not found: {npose_file}")
     sys.exit(1)
