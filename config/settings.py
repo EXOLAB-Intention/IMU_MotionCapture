@@ -21,7 +21,7 @@ class IMUConfig:
     
     # IMU placement
     sensor_locations_lower = [
-        "trunk",
+        "back",
         "thigh_right",
         "shank_right",
         "foot_right",
@@ -62,7 +62,7 @@ class SubjectConfig:
     name: Optional[str] = None
     
     # Segment length ratios (relative to height)
-    trunk_ratio: float = 0.288
+    back_ratio: float = 0.288
     thigh_ratio: float = 0.232
     shank_ratio: float = 0.246
     foot_ratio: float = 0.152
@@ -88,7 +88,7 @@ class EnvironmentConfig:
 class ProcessingConfig:
     """Data processing configuration"""
     calculate_joint_angles: bool = True
-    calculate_trunk_angle: bool = True
+    calculate_back_angle: bool = True
     detect_foot_contact: bool = True
     calculate_velocity: bool = True
     
@@ -144,7 +144,7 @@ class AppSettings:
 
         # # Sensor mapping
         # self.sensor_mapping: dict = {
-        #     "trunk": None,
+        #     "back": None,
         #     "thigh_right": None,
         #     "shank_right": None,
         #     "foot_right": None,
@@ -161,7 +161,7 @@ class AppSettings:
     def get_segment_length(self, segment: str) -> float:
         """Calculate segment length based on subject height"""
         ratios = {
-            'trunk': self.subject.trunk_ratio,
+            'back': self.subject.back_ratio,
             'thigh': self.subject.thigh_ratio,
             'shank': self.subject.shank_ratio,
             'foot': self.subject.foot_ratio,

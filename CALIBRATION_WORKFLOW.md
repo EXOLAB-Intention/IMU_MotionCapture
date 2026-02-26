@@ -91,8 +91,8 @@ Session/
    - Subject가 다르면 새로운 calibration 필요
    - 하루 중 여러 session은 같은 calibration 사용 가능
 
-2. **Trunk IMU = 0**
-   - 현재 시스템에서 trunk IMU 값이 0인 것은 정상입니다
+2. **Back IMU = 0**
+   - 현재 시스템에서 back IMU 값이 0인 것은 정상입니다
    - 다리 센서(thigh, shank, foot)만 사용하여 처리
 
 3. **Gyroscope = 0**
@@ -104,8 +104,8 @@ Session/
 ### "No calibration data available"
 → Calibration trial을 import하고 **Perform Calibration** 먼저 실행
 
-### "No calibration reference for trunk"
-→ Trunk 센서가 0값이므로 정상 (다리 센서만 사용)
+### "No calibration reference for back"
+→ Back 센서가 0값이므로 정상 (다리 센서만 사용)
 
 ### Calibration 적용 후 결과 확인
 → Graph View에서 joint angle 그래프 확인

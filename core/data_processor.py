@@ -57,10 +57,10 @@ class DataProcessor:
         joint_angles = self.kinematics_processor.compute_joint_angles(data)
         data.joint_angles = joint_angles
         
-        # Step 3: Compute trunk orientation
-        print("Step 3: Computing trunk orientation...")
-        trunk_angle = self.kinematics_processor.compute_trunk_angle(data)
-        
+        # Step 3: Compute back orientation
+        print("Step 3: Computing back orientation...")
+        back_angle = self.kinematics_processor.compute_back_angle(data)
+
         # Step 4: Detect foot contacts
         print("Step 4: Detecting foot contacts...")
         gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
@@ -73,13 +73,13 @@ class DataProcessor:
         data.foot_contact_left = foot_contact_left
         
         # Step 5: Compute velocity
-        print("Step 5: Computing trunk velocity...")
-        trunk_velocity, trunk_speed = self.kinematics_processor.compute_velocity(
-            data, 
-            foot_contact_right, 
+        print("Step 5: Computing back velocity...")
+        back_velocity, back_speed = self.kinematics_processor.compute_velocity(
+            data,
+            foot_contact_right,
             foot_contact_left
         )
-        
+
         # Step 6: Detect strides
         print("Step 6: Detecting strides...")
         stride_times_right, stride_times_left = self.kinematics_processor.detect_strides(
@@ -91,22 +91,22 @@ class DataProcessor:
         # Assemble kinematics data
         data.kinematics = KinematicsData(
             timestamps=joint_angles.timestamps,
-            trunk_angle=trunk_angle,
+            back_angle=back_angle,
             foot_contact_right=foot_contact_right,
             foot_contact_left=foot_contact_left,
-            trunk_velocity=trunk_velocity,
-            trunk_speed=trunk_speed,
+            back_velocity=back_velocity,
+            back_speed=back_speed,
             stride_times_right=stride_times_right,
             stride_times_left=stride_times_left
         )
-        
+
         # Mark as processed
         data.is_processed = True
         data.processing_timestamp = datetime.now()
-        
+
         print("Processing complete!")
         return data
-    
+
     def process_kinematics_only(self, data: MotionCaptureData) -> MotionCaptureData:
         """
         Process kinematics without performing calibration
@@ -131,10 +131,10 @@ class DataProcessor:
         joint_angles = self.kinematics_processor.compute_joint_angles(data)
         data.joint_angles = joint_angles
         
-        # Step 2: Compute trunk orientation
-        print("Step 2: Computing trunk orientation...")
-        trunk_angle = self.kinematics_processor.compute_trunk_angle(data)
-        
+        # Step 2: Compute back orientation
+        print("Step 2: Computing back orientation...")
+        back_angle = self.kinematics_processor.compute_back_angle(data)
+
         # Step 3: Detect foot contacts
         print("Step 3: Detecting foot contacts...")
         gait_start_frame, gait_end_frame, foot_contact_right, foot_contact_left = \
@@ -147,13 +147,13 @@ class DataProcessor:
         data.foot_contact_left = foot_contact_left
         
         # Step 4: Compute velocity
-        print("Step 4: Computing trunk velocity...")
-        trunk_velocity, trunk_speed = self.kinematics_processor.compute_velocity(
-            data, 
-            foot_contact_right, 
+        print("Step 4: Computing back velocity...")
+        back_velocity, back_speed = self.kinematics_processor.compute_velocity(
+            data,
+            foot_contact_right,
             foot_contact_left
         )
-        
+
         # Step 5: Detect strides
         print("Step 5: Detecting strides...")
         stride_times_right, stride_times_left = self.kinematics_processor.detect_strides(
@@ -165,20 +165,20 @@ class DataProcessor:
         # Assemble kinematics data
         data.kinematics = KinematicsData(
             timestamps=timestamps,
-            trunk_angle=trunk_angle,
+            back_angle=back_angle,
             foot_contact_right=foot_contact_right,
             foot_contact_left=foot_contact_left,
-            trunk_velocity=trunk_velocity,
-            trunk_speed=trunk_speed,
+            back_velocity=back_velocity,
+            back_speed=back_speed,
             stride_times_right=stride_times_right,
             stride_times_left=stride_times_left
         )
-        
+
         # Mark as processed
         data.is_processed = True
         data.processing_timestamp = datetime.now()
         data.calibration_pose = self.calibration_processor.pose_type
-        
+
         print("Kinematics processing complete!")
         return data
     

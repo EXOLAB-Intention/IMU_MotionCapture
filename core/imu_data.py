@@ -25,7 +25,7 @@ class IMUSample:
 class IMUSensorData:
     """Time series data for a single IMU sensor"""
     sensor_id: int
-    location: str  # trunk, thigh_right, etc.
+    location: str  # back, thigh_right, etc.
     timestamps: np.ndarray  # (N,)
     quaternions: np.ndarray  # (N, 4) [w, x, y, z]
     accelerations: np.ndarray  # (N, 3)
@@ -125,16 +125,16 @@ class KinematicsData:
     """Computed kinematics data"""
     timestamps: np.ndarray  # (N,)
     
-    # Trunk orientation relative to ground (degrees)
-    trunk_angle: np.ndarray  # (N, 3) [pitch, roll, yaw]
-    
+    # Back orientation relative to ground (degrees)
+    back_angle: np.ndarray  # (N, 3) [pitch, roll, yaw]
+
     # Foot contact detection
     foot_contact_right: np.ndarray  # (N,) boolean
     foot_contact_left: np.ndarray  # (N,) boolean
-    
-    # Trunk velocity
-    trunk_velocity: np.ndarray  # (N, 3) [vx, vy, vz] in m/s
-    trunk_speed: np.ndarray  # (N,) scalar speed in m/s
+
+    # Back velocity
+    back_velocity: np.ndarray  # (N, 3) [vx, vy, vz] in m/s
+    back_speed: np.ndarray  # (N,) scalar speed in m/s
     
     # Stride detection
     stride_times_right: List[float] = field(default_factory=list)
@@ -166,7 +166,7 @@ class MotionCaptureData:
     calibration_pose: Optional[str] = None
     calibration_duration: Optional[float] = None
     calibration_start_time: Optional[float] = None
-    heading_offset: Optional[np.ndarray] = None  # Trunk heading at N-pose for visualization
+    heading_offset: Optional[np.ndarray] = None  # Back heading at N-pose for visualization
     is_calibrated: bool = False
     
     # Processing status
@@ -221,7 +221,7 @@ class MotionCaptureData:
         current_mode = app_settings.mode.mode_type
 
         if current_mode == 'Lower-body':
-            return ["trunk", "thigh_right", "shank_right", "foot_right", 
+            return ["back", "thigh_right", "shank_right", "foot_right",
                     "thigh_left", "shank_left", "foot_left"]
         else:
             return ['pelvis', 'chest', 'head', 'upperarm_right', 

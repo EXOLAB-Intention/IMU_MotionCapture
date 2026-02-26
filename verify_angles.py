@@ -18,8 +18,8 @@ print("실제 IMU 데이터로 각도 계산 검증")
 print("="*70)
 
 # File paths
-npose_file = Path("data/PJS_20260119/PJS_20260119_Npose_processed.csv")
-motion_file = Path("data/PJS_20260119/PJS_20260119_walk_01_processed.csv")
+npose_file = Path("data/legacy/PJS_20260119/PJS_20260119_Npose_processed.csv")
+motion_file = Path("data/legacy/PJS_20260119/PJS_20260119_walk_01_processed.csv")
 
 if not npose_file.exists():
     print(f"❌ N-pose file not found: {npose_file}")
@@ -43,8 +43,8 @@ if npose_data is None:
     sys.exit(1)
 
 print(f"✓ N-pose 데이터 로드 완료")
-print(f"  - 샘플 수: {len(npose_data.imu_data['trunk'].timestamps)}")
-print(f"  - 지속 시간: {npose_data.imu_data['trunk'].duration:.2f}초")
+print(f"  - 샘플 수: {len(npose_data.imu_data['back'].timestamps)}")
+print(f"  - 지속 시간: {npose_data.imu_data['back'].duration:.2f}초")
 
 # Perform calibration on N-pose data
 print(f"\n⏳ N-pose Calibration 수행 중...")
@@ -64,8 +64,8 @@ if motion_data is None:
     sys.exit(1)
 
 print(f"✓ 보행 데이터 로드 완료")
-print(f"  - 샘플 수: {len(motion_data.imu_data['trunk'].timestamps)}")
-print(f"  - 지속 시간: {motion_data.imu_data['trunk'].duration:.2f}초")
+print(f"  - 샘플 수: {len(motion_data.imu_data['back'].timestamps)}")
+print(f"  - 지속 시간: {motion_data.imu_data['back'].duration:.2f}초")
 print(f"  - IMU 센서 개수: {len(motion_data.imu_data)}")
 print(f"  - 센서 위치: {list(motion_data.imu_data.keys())}")
 
@@ -90,7 +90,7 @@ print(f"\n📊 관절 각도 통계 (처음 5초 데이터):")
 print(f"\n  Right Hip [yaw, pitch, roll] (degrees):")
 
 # Get first 5 seconds of data
-fs = motion_data.imu_data['trunk'].sampling_frequency
+fs = motion_data.imu_data['back'].sampling_frequency
 n_samples = min(int(5 * fs), len(joint_angles.timestamps))
 
 hip_right_5s = joint_angles.hip_right[:n_samples]

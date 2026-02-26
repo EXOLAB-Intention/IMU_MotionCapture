@@ -32,14 +32,14 @@ def main():
 model: str = "Xsens MTi-630"       # 센서 모델명
 sampling_frequency: int = 1000      # 샘플링 주파수 (Hz)
 num_sensors: int = 7                # 센서 개수
-sensor_locations = ["trunk", ...]   # 센서 위치 목록
+sensor_locations = ["back", ...]    # 센서 위치 목록
 ```
 
 #### `SubjectConfig` - 피험자 정보
 ```python
 height: float = 170.0        # 키 (cm)
 shoe_size: float = 270.0     # 신발 사이즈 (mm)
-trunk_ratio: float = 0.288   # 몸통 길이 비율
+back_ratio: float = 0.288    # 몸통 길이 비율
 ```
 
 #### `AppSettings` - 전체 설정 통합
@@ -73,7 +73,7 @@ gyroscope: np.ndarray         # 자이로 [gx,gy,gz]
 #### `IMUSensorData` - 한 센서의 시계열 데이터
 ```python
 sensor_id: int                # 센서 번호
-location: str                 # 위치 (예: "trunk")
+location: str                 # 위치 (예: "back")
 timestamps: np.ndarray        # 시간 배열 (N개)
 quaternions: np.ndarray       # 방향 배열 (N x 4)
 ```

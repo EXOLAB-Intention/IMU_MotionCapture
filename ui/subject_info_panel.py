@@ -93,12 +93,12 @@ class SubjectInfoPanel(QWidget):
         self.lower_body_widget = QWidget()
         lower_layout = QFormLayout()
         lower_layout.setContentsMargins(0, 0, 0, 0)
-        self.trunk_ratio_label = QLabel("0.288")
+        self.back_ratio_label = QLabel("0.288")
         self.pelvis_ratio_label = QLabel("0.250")
         self.thigh_ratio_label = QLabel("0.232")
         self.shank_ratio_label = QLabel("0.246")
         self.foot_ratio_label = QLabel("0.152")
-        lower_layout.addRow("Trunk:", self.trunk_ratio_label)
+        lower_layout.addRow("Back:", self.back_ratio_label)
         lower_layout.addRow("Pelvis:", self.pelvis_ratio_label)
         lower_layout.addRow("Thigh:", self.thigh_ratio_label)
         lower_layout.addRow("Shank:", self.shank_ratio_label)
@@ -190,7 +190,7 @@ class SubjectInfoPanel(QWidget):
                     # Predict ratios using ML model
                     ratios = self.predictor.predict_segment_ratios(height_mm, foot_length_mm)
                     
-                    trunk_ratio = ratios['trunk_ratio']
+                    back_ratio = ratios['trunk_ratio']  # ML model outputs 'trunk_ratio', remap to back
                     thigh_ratio = ratios['thigh_ratio']
                     shank_ratio = ratios['shank_ratio']
                     foot_ratio = ratios['foot_ratio']
@@ -219,7 +219,7 @@ class SubjectInfoPanel(QWidget):
                 shoe_size = float(self.shoe_size_input.text())
                 
                 # Base ratios (for average height ~170cm)
-                base_trunk_ratio = 0.288
+                base_back_ratio = 0.288
                 base_thigh_ratio = 0.232
                 base_shank_ratio = 0.246
                 base_abdomen_ratio = 0.190
@@ -237,7 +237,7 @@ class SubjectInfoPanel(QWidget):
                 # Height adjustments
                 height_factor = (height - 170.0) / 100.0
                 
-                trunk_ratio = base_trunk_ratio - (height_factor * 0.005)
+                back_ratio = base_back_ratio - (height_factor * 0.005)
                 thigh_ratio = base_thigh_ratio + (height_factor * 0.003)
                 shank_ratio = base_shank_ratio + (height_factor * 0.003)
                 abdomen_ratio = base_abdomen_ratio - (height_factor * 0.002)
@@ -249,7 +249,7 @@ class SubjectInfoPanel(QWidget):
                 pelvis_ratio = base_pelvis_ratio + (height_factor * 0.004)
                 
                 # Ensure ratios are reasonable
-                trunk_ratio = max(0.25, min(0.32, trunk_ratio))
+                back_ratio = max(0.25, min(0.32, back_ratio))
                 thigh_ratio = max(0.20, min(0.27, thigh_ratio))
                 shank_ratio = max(0.21, min(0.28, shank_ratio))
                 foot_ratio = max(0.12, min(0.18, foot_ratio))
@@ -263,7 +263,7 @@ class SubjectInfoPanel(QWidget):
                 
             except ValueError:
                 # If even this fails, use defaults
-                trunk_ratio = 0.288
+                back_ratio = 0.288
                 thigh_ratio = 0.232
                 shank_ratio = 0.246
                 foot_ratio = 0.152
@@ -285,7 +285,7 @@ class SubjectInfoPanel(QWidget):
             self.upperarm_ratio_label.setText(f"{upperarm_ratio:.3f}")
             self.lowerarm_ratio_label.setText(f"{lowerarm_ratio:.3f}")
         else:
-            self.trunk_ratio_label.setText(f"{trunk_ratio:.3f}")
+            self.back_ratio_label.setText(f"{back_ratio:.3f}")
             self.pelvis_ratio_label.setText(f"{pelvis_ratio:.3f}")
             self.thigh_ratio_label.setText(f"{thigh_ratio:.3f}")
             self.shank_ratio_label.setText(f"{shank_ratio:.3f}")
@@ -392,7 +392,7 @@ class SubjectInfoPanel(QWidget):
             }
         else:
             # Get ratios from labels
-            trunk_ratio = float(self.trunk_ratio_label.text())
+            back_ratio = float(self.back_ratio_label.text())
             pelvis_ratio = float(self.pelvis_ratio_label.text())
             thigh_ratio = float(self.thigh_ratio_label.text())
             shank_ratio = float(self.shank_ratio_label.text())
@@ -402,7 +402,7 @@ class SubjectInfoPanel(QWidget):
                 'name': name,
                 'height': height,
                 'shoe_size': shoe_size,
-                'trunk_ratio': trunk_ratio,
+                'back_ratio': back_ratio,
                 'pelvis_ratio': pelvis_ratio,
                 'thigh_ratio': thigh_ratio,
                 'shank_ratio': shank_ratio,
@@ -426,7 +426,7 @@ class SubjectInfoPanel(QWidget):
             self.lowerarm_ratio_label.setText(f"{info.get('lowerarm_ratio', 0.146):.3f}")
         else:
             # Update ratio labels
-            self.trunk_ratio_label.setText(f"{info.get('trunk_ratio', 0.288):.3f}")
+            self.back_ratio_label.setText(f"{info.get('back_ratio', 0.288):.3f}")
             self.pelvis_ratio_label.setText(f"{info.get('pelvis_ratio', 0.250):.3f}")
             self.thigh_ratio_label.setText(f"{info.get('thigh_ratio', 0.232):.3f}")
             self.shank_ratio_label.setText(f"{info.get('shank_ratio', 0.246):.3f}")

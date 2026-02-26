@@ -20,33 +20,32 @@ class FileHandler:
     """Handles file operations for motion capture data"""
     
     # Supported file extensions
-    RAW_EXTENSIONS = ['.csv', '.txt', '.dat']  # Raw IMU data formats
+    RAW_EXTENSIONS = ['.csv', '.txt', '.dat', '.h5']  # Raw IMU data formats
     PROCESSED_EXTENSION = '.mcp'  # Motion Capture Processed data
     
     @staticmethod
-    def import_raw_data(filepath: str) -> MotionCaptureData:
+    def import_raw_data(filepath: str, h5_path: str = None) -> MotionCaptureData:
         """
         Import raw IMU data from file
-        
+
         Args:
             filepath: Path to raw data file
-            
+            h5_path: Internal HDF5 path (required for .h5 files),
+                      e.g. "S009/level_100mps/lv0/trial_01"
+
         Returns:
             MotionCaptureData object with IMU data
-            
-        Note:
-            File format specification to be determined
-            Expected format: CSV or similar with columns for each sensor
         """
-        # TODO: Implement based on actual data format
-        # Placeholder implementation
-        
         file_ext = Path(filepath).suffix.lower()
-        
+
         if file_ext == '.csv':
             return FileHandler._import_csv(filepath)
         elif file_ext == '.txt':
             return FileHandler._import_txt(filepath)
+        elif file_ext == '.h5':
+            if h5_path is None:
+                raise ValueError("h5_path is required for HDF5 import")
+            return FileHandler.import_h5_trial(filepath, h5_path)
         else:
             raise ValueError(f"Unsupported file format: {file_ext}")
     
@@ -151,7 +150,7 @@ class FileHandler:
         else:
             sensor_configs = [
                 {
-                    'location': 'trunk',
+                    'location': 'back',
                     'sensor_id': 0,
                     'quat_cols': ['TrunkIMU_QuatW', 'TrunkIMU_QuatX', 'TrunkIMU_QuatY', 'TrunkIMU_QuatZ'],
                     'acc_cols': ['TrunkIMU_LocalAccX', 'TrunkIMU_LocalAccY', 'TrunkIMU_LocalAccZ'],
@@ -214,10 +213,10 @@ class FileHandler:
             accelerations = df[config['acc_cols']].values  # (N, 3)
             gyroscopes = df[config['gyr_cols']].values  # (N, 3)
             
-            # Fix trunk IMU: Replace all-zero quaternions with identity quaternion [1, 0, 0, 0]
+            # Fix back IMU: Replace all-zero quaternions with identity quaternion [1, 0, 0, 0]
             # This prevents "zero norm" errors in quaternion operations
-            if config['location'] == 'trunk' and np.all(quaternions == 0):
-                print(f"  Note: Trunk quaternions are zero, replacing with identity [1,0,0,0]")
+            if config['location'] == 'back' and np.all(quaternions == 0):
+                print(f"  Note: Back quaternions are zero, replacing with identity [1,0,0,0]")
                 quaternions = np.tile([1.0, 0.0, 0.0, 0.0], (n_samples, 1))
             
             # Create IMUSensorData
@@ -251,6 +250,215 @@ class FileHandler:
         
         return data
     
+    @staticmethod
+    def import_h5_trial(filepath: str, h5_path: str) -> MotionCaptureData:
+        """
+        Import a single trial from an HDF5 file.
+
+        HDF5 structure: Subject > Activity > Level > Trial, with sensor data under
+        trial/robot/. Quaternions are stored as quat_w/x/y/z (scalar-first [w,x,y,z]),
+        matching this project's convention.
+
+        Args:
+            filepath: Path to HDF5 file (.h5)
+            h5_path: Internal path to trial, e.g. "S009/level_100mps/lv0/trial_01"
+
+        Returns:
+            MotionCaptureData with 7 IMU sensors at 100 Hz
+        """
+        import h5py
+
+        session_id = h5_path.replace('/', '_')
+        data = MotionCaptureData(
+            session_id=session_id,
+            creation_time=datetime.now()
+        )
+
+        # Extract subject_id from h5_path (first component)
+        subject_id = h5_path.split('/')[0]
+        data.subject_id = subject_id
+
+        print(f"Importing HDF5 trial: {filepath} [{h5_path}]")
+
+        with h5py.File(filepath, 'r') as f:
+            if h5_path not in f:
+                raise ValueError(f"Trial path '{h5_path}' not found in HDF5 file")
+
+            trial = f[h5_path]
+
+            # Read timestamps (milliseconds → seconds, normalized to start at 0)
+            time_ms = trial['common/time'][:]
+            timestamps = (time_ms - time_ms[0]) / 1000.0  # ms to seconds
+            n_samples = len(timestamps)
+            sampling_freq = 100.0  # 100 Hz (10ms intervals)
+
+            # Validate time monotonicity
+            dt = np.diff(time_ms)
+            if np.any(dt <= 0):
+                n_bad = np.sum(dt <= 0)
+                print(f"  Warning: {n_bad} non-monotonic time steps detected")
+            mean_dt = np.mean(dt)
+            if abs(mean_dt - 10.0) > 1.0:
+                print(f"  Warning: Mean time step is {mean_dt:.2f}ms (expected 10ms)")
+
+            print(f"  Time range: {timestamps[0]:.3f}s to {timestamps[-1]:.3f}s ({n_samples} samples)")
+            print(f"  Sampling frequency: {sampling_freq} Hz")
+
+            # Sensor mapping: H5 path → (location name, sensor_id)
+            # hip_imu is skipped (not used in lower-body pipeline)
+            sensor_map = [
+                ('robot/back_imu',         'back',        0),
+                ('robot/thigh_imu/left',   'thigh_left',  1),
+                ('robot/thigh_imu/right',  'thigh_right', 2),
+                ('robot/shank_imu/left',   'shank_left',  3),
+                ('robot/shank_imu/right',  'shank_right', 4),
+                ('robot/foot_imu/left',    'foot_left',   5),
+                ('robot/foot_imu/right',   'foot_right',  6),
+            ]
+
+            for h5_sensor_path, location, sensor_id in sensor_map:
+                full_path = h5_path + '/' + h5_sensor_path
+                if h5_sensor_path not in trial:
+                    print(f"  Warning: Sensor {h5_sensor_path} not found, skipping")
+                    continue
+
+                sensor_grp = trial[h5_sensor_path]
+
+                # Check required datasets exist
+                required = ['quat_w', 'quat_x', 'quat_y', 'quat_z',
+                            'accel_x', 'accel_y', 'accel_z',
+                            'gyro_x', 'gyro_y', 'gyro_z']
+                missing = [d for d in required if d not in sensor_grp]
+                if missing:
+                    raise ValueError(
+                        f"Sensor {h5_sensor_path} missing datasets: {missing}")
+
+                # Stack quaternions [w, x, y, z] — scalar-first, matching project convention
+                quaternions = np.column_stack([
+                    sensor_grp['quat_w'][:],
+                    sensor_grp['quat_x'][:],
+                    sensor_grp['quat_y'][:],
+                    sensor_grp['quat_z'][:]
+                ])
+
+                accelerations = np.column_stack([
+                    sensor_grp['accel_x'][:],
+                    sensor_grp['accel_y'][:],
+                    sensor_grp['accel_z'][:]
+                ])
+
+                gyroscopes = np.column_stack([
+                    sensor_grp['gyro_x'][:],
+                    sensor_grp['gyro_y'][:],
+                    sensor_grp['gyro_z'][:]
+                ])
+
+                sensor_data = IMUSensorData(
+                    sensor_id=sensor_id,
+                    location=location,
+                    timestamps=timestamps.copy(),
+                    quaternions=quaternions,
+                    accelerations=accelerations,
+                    gyroscopes=gyroscopes,
+                    sampling_frequency=sampling_freq
+                )
+                data.add_imu_sensor_data(sensor_data)
+                print(f"  Loaded {location}: {n_samples} samples")
+
+        print(f"Successfully imported {len(data.imu_data)} sensors from HDF5")
+        return data
+
+    @staticmethod
+    def scan_h5_file(filepath: str) -> dict:
+        """
+        Scan an HDF5 file and return its hierarchical structure.
+
+        Returns:
+            Dict of {subject_id: {activity: {level: [trial_ids]}}}
+        """
+        import h5py
+
+        structure = {}
+
+        try:
+            with h5py.File(filepath, 'r') as f:
+                for subject_id in f:
+                    subject_grp = f[subject_id]
+                    if not isinstance(subject_grp, h5py.Group):
+                        continue
+
+                    structure[subject_id] = {}
+
+                    for activity in subject_grp:
+                        if activity == 'sub_info':
+                            continue
+                        activity_grp = subject_grp[activity]
+                        if not isinstance(activity_grp, h5py.Group):
+                            continue
+
+                        structure[subject_id][activity] = {}
+
+                        for level in activity_grp:
+                            level_grp = activity_grp[level]
+                            if not isinstance(level_grp, h5py.Group):
+                                continue
+
+                            trials = sorted([
+                                t for t in level_grp
+                                if isinstance(level_grp[t], h5py.Group)
+                            ])
+                            structure[subject_id][activity][level] = trials
+
+        except Exception as e:
+            raise ValueError(f"Failed to scan HDF5 file: {e}")
+
+        return structure
+
+    @staticmethod
+    def load_h5_subject_info(filepath: str, subject_id: str) -> dict:
+        """
+        Read subject information from an HDF5 file.
+
+        Args:
+            filepath: Path to HDF5 file
+            subject_id: Subject group name (e.g. "S009")
+
+        Returns:
+            Dict with keys: age, height (cm), weight (kg), sex
+        """
+        import h5py
+
+        with h5py.File(filepath, 'r') as f:
+            si_path = f"{subject_id}/sub_info"
+            if si_path not in f:
+                raise ValueError(f"sub_info not found for {subject_id}")
+
+            si = f[si_path]
+            info = {}
+
+            # Read scalar datasets, decode byte strings
+            if 'age' in si and isinstance(si['age'], h5py.Dataset):
+                info['age'] = int(si['age'][()].decode('utf-8'))
+            if 'height' in si and isinstance(si['height'], h5py.Dataset):
+                height_mm = float(si['height'][()].decode('utf-8'))
+                info['height'] = height_mm / 10.0  # mm → cm
+            if 'weight' in si and isinstance(si['weight'], h5py.Dataset):
+                info['weight'] = float(si['weight'][()].decode('utf-8'))
+            if 'sex' in si and isinstance(si['sex'], h5py.Dataset):
+                sex_val = si['sex'][()].decode('utf-8')
+                info['sex'] = 'male' if sex_val == '0' else 'female'
+
+            # Validate
+            if info.get('height', 0) <= 0:
+                print(f"  Warning: Invalid height: {info.get('height')}")
+            if info.get('weight', 0) <= 0:
+                print(f"  Warning: Invalid weight: {info.get('weight')}")
+
+            print(f"  Subject info: height={info.get('height')}cm, "
+                  f"weight={info.get('weight')}kg, age={info.get('age')}")
+
+        return info
+
     @staticmethod
     def save_processed_data(data: MotionCaptureData, filepath: str):
         """
@@ -309,11 +517,11 @@ class FileHandler:
         if data.kinematics:
             save_dict['kinematics'] = {
                 'timestamps': data.kinematics.timestamps.tolist(),
-                'trunk_angle': data.kinematics.trunk_angle.tolist(),
+                'back_angle': data.kinematics.back_angle.tolist(),
                 'foot_contact_right': data.kinematics.foot_contact_right.tolist(),
                 'foot_contact_left': data.kinematics.foot_contact_left.tolist(),
-                'trunk_velocity': data.kinematics.trunk_velocity.tolist(),
-                'trunk_speed': data.kinematics.trunk_speed.tolist(),
+                'back_velocity': data.kinematics.back_velocity.tolist(),
+                'back_speed': data.kinematics.back_speed.tolist(),
                 'stride_times_right': data.kinematics.stride_times_right,
                 'stride_times_left': data.kinematics.stride_times_left
             }
@@ -353,6 +561,12 @@ class FileHandler:
         if save_dict['processing_timestamp']:
             data.processing_timestamp = datetime.fromisoformat(save_dict['processing_timestamp'])
         
+        # Migration: remap legacy 'trunk' → 'back' in imu_data
+        if 'trunk' in save_dict['imu_data'] and 'back' not in save_dict['imu_data']:
+            print("  Migrating legacy 'trunk' key to 'back' in imu_data")
+            save_dict['imu_data']['back'] = save_dict['imu_data'].pop('trunk')
+            save_dict['imu_data']['back']['location'] = 'back'
+
         # Reconstruct IMU data
         for location, imu_dict in save_dict['imu_data'].items():
             sensor_data = IMUSensorData(
@@ -382,13 +596,19 @@ class FileHandler:
         # Reconstruct kinematics if available
         if save_dict['kinematics']:
             kd = save_dict['kinematics']
+            # Migration: remap legacy 'trunk_*' keys to 'back_*'
+            if 'trunk_angle' in kd and 'back_angle' not in kd:
+                print("  Migrating legacy 'trunk_*' kinematics keys to 'back_*'")
+                kd['back_angle'] = kd.pop('trunk_angle')
+                kd['back_velocity'] = kd.pop('trunk_velocity')
+                kd['back_speed'] = kd.pop('trunk_speed')
             data.kinematics = KinematicsData(
                 timestamps=np.array(kd['timestamps']),
-                trunk_angle=np.array(kd['trunk_angle']),
+                back_angle=np.array(kd['back_angle']),
                 foot_contact_right=np.array(kd['foot_contact_right']),
                 foot_contact_left=np.array(kd['foot_contact_left']),
-                trunk_velocity=np.array(kd['trunk_velocity']),
-                trunk_speed=np.array(kd['trunk_speed']),
+                back_velocity=np.array(kd['back_velocity']),
+                back_speed=np.array(kd['back_speed']),
                 stride_times_right=kd['stride_times_right'],
                 stride_times_left=kd['stride_times_left']
             )

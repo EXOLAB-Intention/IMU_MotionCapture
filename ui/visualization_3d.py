@@ -23,7 +23,7 @@ class Visualization3D(QWidget):
     Provides interactive viewing with rotation, zoom, and smooth playback.
     
     Body structure (lower body):
-        - Trunk (torso)
+        - Back (torso)
         - Left/Right Thigh (hip to knee)
         - Left/Right Shank (knee to ankle)
         - Left/Right Foot (ankle to toe)
@@ -34,7 +34,7 @@ class Visualization3D(QWidget):
     
     # Segment lengths (meters) - approximate human proportions
     SEGMENT_LENGTHS = {
-        'trunk': 0.50,     # Torso height
+        'back': 0.50,      # Torso height
         'thigh': 0.40,     # Hip to knee
         'shank': 0.42,     # Knee to ankle
         'foot': 0.25,      # Ankle to toe
@@ -52,7 +52,7 @@ class Visualization3D(QWidget):
         
         # Segment lengths (meters) - initialized from settings
         self.SEGMENT_LENGTHS = {
-            'trunk': 0.50,     # Torso height
+            'back': 0.50,      # Torso height
             'pelvis': 0.45,    # Pelvis width
             'thigh': 0.40,     # Hip to knee
             'shank': 0.42,     # Knee to ankle
@@ -166,7 +166,7 @@ class Visualization3D(QWidget):
         """Load segment lengths from app settings based on subject height"""
         try:
             # Get segment lengths from settings (in cm, converted to m)
-            self.SEGMENT_LENGTHS['trunk'] = app_settings.get_segment_length('trunk') / 100.0
+            self.SEGMENT_LENGTHS['back'] = app_settings.get_segment_length('back') / 100.0
             self.SEGMENT_LENGTHS['pelvis'] = app_settings.get_segment_length('pelvis') / 100.0
             self.SEGMENT_LENGTHS['thigh'] = app_settings.get_segment_length('thigh') / 100.0
             self.SEGMENT_LENGTHS['shank'] = app_settings.get_segment_length('shank') / 100.0
@@ -181,7 +181,7 @@ class Visualization3D(QWidget):
             # Fallback to default values if settings not available
             print(f"Warning: Could not load segment lengths from settings: {e}")
             self.SEGMENT_LENGTHS = {
-                'trunk': 0.50,
+                'back': 0.50,
                 'pelvis': 0.45,
                 'thigh': 0.40,
                 'shank': 0.42,
@@ -205,7 +205,7 @@ class Visualization3D(QWidget):
             height = subject_info.get('height', 170.0)  # cm
             
             # Get ratios
-            trunk_ratio = subject_info.get('trunk_ratio', 0.288)
+            back_ratio = subject_info.get('back_ratio', 0.288)
             pelvis_ratio = subject_info.get('pelvis_ratio', 0.250)
             thigh_ratio = subject_info.get('thigh_ratio', 0.232)
             shank_ratio = subject_info.get('shank_ratio', 0.246)
@@ -219,7 +219,7 @@ class Visualization3D(QWidget):
             lowerarm_ratio = subject_info.get('lowerarm_ratio', 0.146)
             
             # Calculate segment lengths (convert cm to m)
-            self.SEGMENT_LENGTHS['trunk'] = (height * trunk_ratio) / 100.0
+            self.SEGMENT_LENGTHS['back'] = (height * back_ratio) / 100.0
             self.SEGMENT_LENGTHS['pelvis'] = (height * pelvis_ratio) / 100.0
             self.SEGMENT_LENGTHS['thigh'] = (height * thigh_ratio) / 100.0
             self.SEGMENT_LENGTHS['shank'] = (height * shank_ratio) / 100.0
@@ -408,7 +408,7 @@ class Visualization3D(QWidget):
         else:
             # Define segments and their colors
             segments = {
-                'trunk': (1.0, 1.0, 1.0, 1.0),      # White
+                'back': (1.0, 1.0, 1.0, 1.0),       # White
                 'pelvis': (0.8, 0.8, 0.8, 1.0),     # Gray (connects left and right hip)
                 'thigh_right': (1.0, 0.3, 0.3, 1.0),  # Red
                 'thigh_left': (0.3, 0.3, 1.0, 1.0),   # Blue
@@ -418,7 +418,7 @@ class Visualization3D(QWidget):
                 'foot_left': (0.7, 0.7, 1.0, 1.0),    # Lighter blue
             }
             joint_names = ['hip', 'rhip', 'lhip', 'knee_right', 'knee_left', 'ankle_right', 'ankle_left', 'toe_right', 'toe_left']
-            segment_names = ['trunk', 'thigh_right', 'thigh_left', 'shank_right', 'shank_left', 'foot_right', 'foot_left']
+            segment_names = ['back', 'thigh_right', 'thigh_left', 'shank_right', 'shank_left', 'foot_right', 'foot_left']
 
         # Create line items for each segment
         for segment_name, color in segments.items():
@@ -519,15 +519,15 @@ class Visualization3D(QWidget):
         
         UNIFIED IMU attachment directions (sensor local frame):
         All segments now use the same coordinate system after calibration:
-        - trunk:       x-up, y-right, z-forward (walking direction)
+        - back:        x-up, y-right, z-forward (walking direction)
         - thigh/shank: x-up, y-right, z-forward
         - foot:        x-up, y-right, z-forward
-        
+
         After N-pose calibration with unified q_desired, the calibrated quaternion
         represents the rotation FROM sensor's local frame TO global frame.
-        
+
         So to get segment direction in global frame:
-        - trunk: local +X (up) → apply q_trunk
+        - back: local +X (up) → apply q_back
         - thigh: local -X (down, since x-up and leg goes down) → apply q_thigh
         - shank: local -X (down) → apply q_shank
         - foot:  local +Z (forward, following walking direction) → apply q_foot
@@ -569,7 +569,7 @@ class Visualization3D(QWidget):
             # These represent the segment's longitudinal axis in sensor frame
             # ============================================================
             
-            # trunk: IMU x-axis points UP along trunk → local +X is segment direction
+            # back: IMU x-axis points UP along back → local +X is segment direction
             abdomen_local_dir = np.array([self.SEGMENT_LENGTHS['abdomen'], 0.0, 0.0])
             chest_local_dir = np.array([self.SEGMENT_LENGTHS['chest'], 0.0, 0.0])
             head_local_dir = np.array([self.SEGMENT_LENGTHS['head'], 0.0, 0.0])
@@ -631,7 +631,7 @@ class Visualization3D(QWidget):
             positions['wrist_left'] = wrist_l_pos
 
         else:
-            q_trunk = get_quaternion('trunk')
+            q_back = get_quaternion('back')
             q_thigh_r = get_quaternion('thigh_right')
             q_thigh_l = get_quaternion('thigh_left')
             q_shank_r = get_quaternion('shank_right')
@@ -646,8 +646,8 @@ class Visualization3D(QWidget):
             # All segments now have UNIFIED coordinate system (x-up, y-right, z-forward)
             # ============================================================
             
-            # trunk: IMU x-axis points UP along trunk → local +X is segment direction
-            trunk_local_dir = np.array([self.SEGMENT_LENGTHS['trunk'], 0.0, 0.0])
+            # back: IMU x-axis points UP along back → local +X is segment direction
+            back_local_dir = np.array([self.SEGMENT_LENGTHS['back'], 0.0, 0.0])
             
             # thigh/shank: IMU x-axis points UP, but leg points DOWN → local -X is segment direction
             thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
@@ -665,7 +665,7 @@ class Visualization3D(QWidget):
             # foot: IMU z-axis points FORWARD → local +Z is segment direction
             # foot_local_dir = np.array([0.0, 0.0, self.SEGMENT_LENGTHS['foot']])
             
-            # Hip offsets in trunk's local frame
+            # Hip offsets in back's local frame
             # With unified coordinate system: y-right, so right hip is +Y, left hip is -Y
             rhip_local_offset = np.array([0.0, self.SEGMENT_LENGTHS['pelvis']/2.0, 0.0])
             lhip_local_offset = np.array([0.0, -self.SEGMENT_LENGTHS['pelvis']/2.0, 0.0])
@@ -674,14 +674,14 @@ class Visualization3D(QWidget):
             # Forward Kinematics: rotate local directions to global frame
             # ============================================================
             
-            # Trunk
-            trunk_dir = rotate_vector(trunk_local_dir, q_trunk)
-            trunk_top = hip_pos + trunk_dir
-            positions['trunk_top'] = trunk_top
-            
-            # Hip joints (offset from pelvis center using trunk orientation)
-            rhip_offset = rotate_vector(rhip_local_offset, q_trunk)
-            lhip_offset = rotate_vector(lhip_local_offset, q_trunk)
+            # Back
+            back_dir = rotate_vector(back_local_dir, q_back)
+            back_top = hip_pos + back_dir
+            positions['back_top'] = back_top
+
+            # Hip joints (offset from pelvis center using back orientation)
+            rhip_offset = rotate_vector(rhip_local_offset, q_back)
+            lhip_offset = rotate_vector(lhip_local_offset, q_back)
             rhip_pos = hip_pos + rhip_offset
             lhip_pos = hip_pos + lhip_offset
             positions['rhip'] = rhip_pos
@@ -736,7 +736,7 @@ class Visualization3D(QWidget):
         else:
             # Update segment lines
             segments_to_draw = [
-                ('trunk', positions['hip'], positions['trunk_top']),
+                ('back', positions['hip'], positions['back_top']),
                 ('pelvis', positions['lhip'], positions['rhip']),  # Pelvis connects left and right hip
                 ('thigh_right', positions['rhip'], positions['knee_right']),
                 ('thigh_left', positions['lhip'], positions['knee_left']),
@@ -799,7 +799,7 @@ class Visualization3D(QWidget):
             ]
         else:
             segment_configs = [
-                ('trunk', (positions['hip'] + positions['trunk_top']) / 2),
+                ('back', (positions['hip'] + positions['back_top']) / 2),
                 ('thigh_right', (positions['rhip'] + positions['knee_right']) / 2),
                 ('thigh_left', (positions['lhip'] + positions['knee_left']) / 2),
                 ('shank_right', (positions['knee_right'] + positions['ankle_right']) / 2),

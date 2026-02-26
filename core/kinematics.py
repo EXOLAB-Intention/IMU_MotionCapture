@@ -73,8 +73,8 @@ class KinematicsProcessor:
         if not data.imu_data:
             return None
         
-        # 2. Set reference timestamp (trunk IMU timestamps)
-        ref_sensor_name = 'trunk' if self.current_mode == 'Lower-body' else 'pelvis'
+        # 2. Set reference timestamp (back IMU timestamps)
+        ref_sensor_name = 'back' if self.current_mode == 'Lower-body' else 'pelvis'
         n_samples = len(data.imu_data[ref_sensor_name].timestamps)
         timestamps = data.imu_data[ref_sensor_name].timestamps
 
@@ -145,9 +145,9 @@ class KinematicsProcessor:
         
         # Lower-body joints
         else:
-            # Hip: Trunk (proximal) → Thigh (distal)
-            hip_right = calculate_joint_angle('trunk', 'thigh_right')
-            hip_left = calculate_joint_angle('trunk', 'thigh_left')
+            # Hip: Back (proximal) → Thigh (distal)
+            hip_right = calculate_joint_angle('back', 'thigh_right')
+            hip_left = calculate_joint_angle('back', 'thigh_left')
             
             # Knee: Thigh (proximal) → Shank (distal)
             knee_right = calculate_joint_angle('thigh_right', 'shank_right')
@@ -169,25 +169,25 @@ class KinematicsProcessor:
             )
             return joint_angles
     
-    def compute_trunk_angle(self, data: MotionCaptureData) -> np.ndarray:
+    def compute_back_angle(self, data: MotionCaptureData) -> np.ndarray:
         """
-        Compute trunk orientation relative to ground
-        
+        Compute back orientation relative to ground
+
         Args:
             data: Motion capture data
-            
+
         Returns:
-            (N, 3) array of trunk angles [pitch, roll, yaw] in degrees
+            (N, 3) array of back angles [pitch, roll, yaw] in degrees
         """
         if not data.imu_data:
             return None
-        
-        ref_sensor_name = 'trunk' if self.current_mode == 'Lower-body' else 'pelvis'
+
+        ref_sensor_name = 'back' if self.current_mode == 'Lower-body' else 'pelvis'
         n_samples = len(data.imu_data[ref_sensor_name].timestamps)
-    
-        q_trunk = data.imu_data[ref_sensor_name].quaternions  # (N,4)
-        trunk_angles = self.quaternion_to_euler(q_trunk)  # (N,3)
-        return trunk_angles
+
+        q_back = data.imu_data[ref_sensor_name].quaternions  # (N,4)
+        back_angles = self.quaternion_to_euler(q_back)  # (N,3)
+        return back_angles
     
     def detect_foot_contact(
         self, 
@@ -518,25 +518,25 @@ class KinematicsProcessor:
         foot_contact_left: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Estimate trunk velocity using gait events and kinematics
-        
+        Estimate back velocity using gait events and kinematics
+
         Args:
             data: Motion capture data
             foot_contact_right: Right foot contact events
             foot_contact_left: Left foot contact events
-            
+
         Returns:
-            Tuple of (trunk_velocity [N,3], trunk_speed [N])
+            Tuple of (back_velocity [N,3], back_speed [N])
             
         TODO: Implement velocity estimation algorithm
         """
         
-        ref_sensor_name = 'trunk' if self.current_mode == 'Lower-body' else 'pelvis'
+        ref_sensor_name = 'back' if self.current_mode == 'Lower-body' else 'pelvis'
         n_samples = len(data.imu_data[ref_sensor_name].timestamps)
-        trunk_velocity = np.zeros((n_samples, 3))
-        trunk_speed = np.zeros(n_samples)
-        
-        return trunk_velocity, trunk_speed
+        back_velocity = np.zeros((n_samples, 3))
+        back_speed = np.zeros(n_samples)
+
+        return back_velocity, back_speed
     
     def detect_strides(
         self,

@@ -7,14 +7,15 @@ from PyQt5.QtCore import pyqtSignal, QObject
 
 class MenuBar(QObject):
     """Menu bar with File, View, and other menus"""
-    
+
     # Signals for menu actions
     import_file_requested = pyqtSignal(str)  # filepath
     open_file_requested = pyqtSignal(str)  # filepath
     save_requested = pyqtSignal()
     save_as_requested = pyqtSignal(str)  # filepath
     exit_requested = pyqtSignal()
-    
+    h5_file_selected = pyqtSignal(str)  # h5 filepath (triggers navigator H5 mode)
+
     # Calibration signals
     load_calibration_requested = pyqtSignal(str)  # calibration filepath
     save_calibration_requested = pyqtSignal(str)  # calibration filepath
@@ -212,10 +213,13 @@ class MenuBar(QObject):
             None,
             "Import Raw IMU Data",
             "",
-            "CSV Files (*.csv);;Text Files (*.txt);;Data Files (*.dat);;All Files (*)"
+            "HDF5 Files (*.h5);;CSV Files (*.csv);;Text Files (*.txt);;Data Files (*.dat);;All Files (*)"
         )
         if filepath:
-            self.import_file_requested.emit(filepath)
+            if filepath.lower().endswith('.h5'):
+                self.h5_file_selected.emit(filepath)
+            else:
+                self.import_file_requested.emit(filepath)
     
     def _on_save(self):
         """Handle Save action"""

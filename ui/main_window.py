@@ -22,13 +22,14 @@ from config.settings import app_settings
 
 class MainWindow(QMainWindow):
     """Main application window"""
-    
+
     def __init__(self):
         super().__init__()
         self.current_data = None
         self.current_file_path = None
         self.file_handler = FileHandler()
         self.data_processor = DataProcessor()
+        self.h5_calibrations = {}  # {subject_id: CalibrationProcessor} for H5 per-subject persistence
         
         self._init_ui()
         self._connect_signals()
@@ -120,6 +121,10 @@ class MainWindow(QMainWindow):
         self.menu.save_calibration_requested.connect(self.save_calibration)
         self.menu.perform_calibration_requested.connect(self.perform_calibration)
         
+        # H5 signals
+        self.menu.h5_file_selected.connect(self._on_h5_file_selected)
+        self.navigator.h5_trial_selected.connect(self.import_h5_trial)
+
         # Navigator signals
         self.navigator.file_selected.connect(self.load_selected_file)
         self.navigator.folder_selected.connect(self.on_folder_selected)
@@ -189,6 +194,53 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Import Error", f"Failed to import file:\n{str(e)}")
             self.statusBar().showMessage("Import failed", 3000)
     
+    @pyqtSlot(str)
+    def _on_h5_file_selected(self, h5_filepath: str):
+        """Handle H5 file selection from menu - switch navigator to H5 mode"""
+        self.navigator.set_h5_file(h5_filepath)
+        self.statusBar().showMessage(f"Opened H5 file: {os.path.basename(h5_filepath)}", 3000)
+
+    @pyqtSlot(str, str)
+    def import_h5_trial(self, h5_filepath: str, h5_path: str):
+        """Import a single trial from an HDF5 file"""
+        try:
+            self.statusBar().showMessage(f"Importing H5 trial: {h5_path}...")
+
+            # Import trial data
+            data = FileHandler.import_h5_trial(h5_filepath, h5_path)
+
+            self.current_data = data
+            self.current_file_path = None  # H5 trials are not saved individually
+
+            # Update UI
+            self.main_view.set_data(data)
+            self.notes.set_file(f"{os.path.basename(h5_filepath)} / {h5_path}")
+            self.notes.set_notes(data.notes)
+
+            # Auto-load subject info from H5
+            subject_id = h5_path.split('/')[0]
+            try:
+                h5_subject = FileHandler.load_h5_subject_info(h5_filepath, subject_id)
+                if h5_subject.get('height'):
+                    # Build info dict compatible with set_subject_info
+                    info = {
+                        'name': subject_id,
+                        'height': h5_subject['height'],
+                        'shoe_size': 270.0,  # Default, not available in H5
+                    }
+                    app_settings.subject.height = h5_subject['height']
+                    if h5_subject.get('name'):
+                        info['name'] = h5_subject['name']
+                    self.subject_info.set_subject_info(info)
+            except Exception as e:
+                print(f"Could not load H5 subject info: {e}")
+
+            self.statusBar().showMessage(f"Imported H5 trial: {h5_path}", 3000)
+
+        except Exception as e:
+            QMessageBox.critical(self, "H5 Import Error", f"Failed to import H5 trial:\n{str(e)}")
+            self.statusBar().showMessage("H5 import failed", 3000)
+
     @pyqtSlot(str)
     def open_file(self, filepath: str):
         """Open processed motion capture file"""
@@ -421,8 +473,9 @@ class MainWindow(QMainWindow):
         """Update calibration status indicator in status bar"""
         if self.data_processor.calibration_processor.is_calibrated:
             pose_type = self.data_processor.calibration_processor.pose_type or "Unknown"
+            filter_type = self.data_processor.calibration_processor.filter_type or "Unknown"
             n_sensors = len(self.data_processor.calibration_processor.offset_quaternions)
-            self.calib_indicator.setText(f"🟢 {pose_type} Calibration ({n_sensors} sensors)")
+            self.calib_indicator.setText(f"🟢 {pose_type} [{filter_type}] ({n_sensors} sensors)")
             self.calib_indicator.setStyleSheet("color: #4CAF50; font-weight: bold;")
         else:
             self.calib_indicator.setText("⚫ No Calibration")
@@ -464,7 +517,7 @@ class MainWindow(QMainWindow):
                 "Calibration Loaded",
                 f"Calibration loaded successfully!\n"
                 f"Pose type: {self.data_processor.calibration_processor.pose_type}\n"
-                f"mode: {self.data_processor.calibration_processor.mode}\n"
+                f"Filter: {self.data_processor.calibration_processor.filter_type}\n"
                 f"Sensors: {len(self.data_processor.calibration_processor.offset_quaternions)}"
             )
         
@@ -541,33 +594,51 @@ class MainWindow(QMainWindow):
                 0,
                 False
             )
-            
+
             if not ok:
                 return
-            
+
+            # Ask for filter type (orientation filter method)
+            from core.calibration import CalibrationProcessor
+            filter_type, ok = QInputDialog.getItem(
+                self,
+                "Orientation Filter",
+                "Select orientation filter type:\n\n"
+                "VRU-AHS: Yaw-reset only (for Xsens VRU-AHS filter)\n"
+                "North-Reference: Full orientation alignment (for north-referenced filter)",
+                CalibrationProcessor.FILTER_TYPES,
+                0,
+                False
+            )
+
+            if not ok:
+                return
+
             current_mode = app_settings.mode.mode_type
 
             self.statusBar().showMessage("Performing calibration...")
-            
+
             # Perform calibration
             self.data_processor.calibration_processor.calibrate(
                 self.current_data,
                 start_time,
                 end_time,
                 pose_type,
-                current_mode
+                current_mode,
+                filter_type
             )
-            
+
             self.statusBar().showMessage("Calibration complete", 3000)
-            
+
             self._update_calibration_status()
-            
+
             QMessageBox.information(
                 self,
                 "Calibration Complete",
                 f"Calibration performed successfully!\n\n"
                 f"Pose type: {pose_type}\n"
-                f"mode: {current_mode}\n"
+                f"Filter: {filter_type}\n"
+                f"Mode: {current_mode}\n"
                 f"Time range: {start_time:.2f}s - {end_time:.2f}s ({range_source})\n"
                 f"Sensors calibrated: {len(self.data_processor.calibration_processor.offset_quaternions)}\n\n"
                 f"Now click 'Process > Process Data' to apply calibration."

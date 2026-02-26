@@ -4,7 +4,7 @@ Xsens MTi-630 기반 하체 운동학 분석 GUI
 
 ## 센서 구성
 
-7개 센서: trunk, thigh_right/left, shank_right/left, foot_right/left
+7개 센서: back, thigh_right/left, shank_right/left, foot_right/left
 - Quaternion (w,x,y,z), 3축 가속도/자이로
 - 샘플링: 500~1000Hz
 

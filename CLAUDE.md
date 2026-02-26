@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-IMU Motion Capture: a PyQt5 GUI for processing lower-body and upper-body motion capture data from Xsens MTi-630 IMU sensors. Lower-body mode uses 7 sensors (trunk, thigh/shank/foot x L/R); upper-body mode adds pelvis, chest, head, and arm sensors. Written in Python, developed by EXO Lab at KAIST. The project language is mixed Korean/English.
+IMU Motion Capture: a PyQt5 GUI for processing lower-body and upper-body motion capture data from Xsens MTi-630 IMU sensors. Lower-body mode uses 7 sensors (back, thigh/shank/foot x L/R); upper-body mode adds pelvis, chest, head, and arm sensors. Supports both legacy CSV and HDF5 (.h5) data formats. Written in Python, developed by EXO Lab at KAIST. The project language is mixed Korean/English.
 
 ## Commands
 
@@ -28,11 +28,11 @@ core/                    # Processing pipeline (no UI dependencies)
   dev/                   # Development/experimental modules
     detect_foot_contact/ # Standalone foot contact detection package
     body_segment_ratio/  # ML body segment ratio prediction from anthropometrics
-file_io/file_handler.py  # CSV import (lower+upper body), .mcp/.cal/.subject save/load
+file_io/file_handler.py  # CSV/HDF5 import (lower+upper body), .mcp/.cal/.subject save/load
 ui/                      # PyQt5 GUI (signal-slot pattern)
-  main_window.py         # Top-level window, signal routing hub, mode switching
+  main_window.py         # Top-level window, signal routing hub, mode switching, H5 trial import
   menu_bar.py            # Menus with signals (import, calibration, process)
-  navigator.py           # Folder-tree file browser with color-coded file types
+  navigator.py           # Folder-tree + HDF5 hierarchy browser with color-coded file types
   main_view.py           # Central view (3D + graphs + timeline), mode toggle toolbar
   graph_view.py          # Matplotlib joint angle plots (mode-aware: lower/upper body)
   visualization_3d.py    # 3D skeleton rendering (lower + upper body, moving grid)
@@ -40,17 +40,21 @@ ui/                      # PyQt5 GUI (signal-slot pattern)
   time_bar.py            # Timeline slider and range selection
   notes.py               # Session notes editor
 data/                    # Sample/test data (gitignored, not tracked)
-  PJS_20260119/          # Subject datasets with raw CSV + processed files
-  HEB_20260126/          # Each subfolder = one capture session
-  HWB_20260122/          #   contains .csv (raw), _processed.csv, .mcp, .cal, .subject
-  HWB_20260209/
-  JJY_20260119/
-  KTY_20260122/
+  combined_data_S009.h5  # HDF5 dataset (Subject > Activity > Level > Trial)
+  legacy/                # Legacy per-session CSV data
+    PJS_20260119/        # Subject datasets with raw CSV + processed files
+    HEB_20260126/        # Each subfolder = one capture session
+    HWB_20260122/        #   contains .csv (raw), _processed.csv, .mcp, .cal, .subject
+    HWB_20260209/
+    JJY_20260119/
+    KTY_20260122/
 ```
 
 ### Data Flow
 
-Raw CSV → `FileHandler.import_raw_data()` → `MotionCaptureData` → `CalibrationProcessor.calibrate()` + `.apply_to_data()` → `KinematicsProcessor.compute_joint_angles()` → `JointAngles` → save as `.mcp`
+**Legacy CSV:** Raw CSV → `FileHandler.import_raw_data()` → `MotionCaptureData` → `CalibrationProcessor.calibrate()` + `.apply_to_data()` → `KinematicsProcessor.compute_joint_angles()` → `JointAngles` → save as `.mcp`
+
+**HDF5:** File > Import `.h5` → Navigator H5 tree → double-click trial → `FileHandler.import_h5_trial()` → `MotionCaptureData` (100 Hz, 7 sensors) → calibrate → process → display
 
 ### Signal-Slot Wiring
 
@@ -66,7 +70,7 @@ All inter-component communication uses PyQt5 signals. `MainWindow._connect_signa
 
 ### Coordinate Frames
 - Ground: X=forward, Y=left, Z=up
-- Trunk IMU: x-up, y-right, z-forward
+- Back IMU: x-up, y-right, z-forward
 - Leg IMUs: x-up, y-left, z-backward
 - Y180 rotation (`R_Y180 = [[-1,0,0],[0,1,0],[0,0,-1]]`) applied for sensor-to-body conversion
 
@@ -74,15 +78,16 @@ All inter-component communication uses PyQt5 signals. `MainWindow._connect_signa
 - Quaternions: `np.ndarray` shape `(N, 4)`
 - Vectors (accel/gyro/angles): `np.ndarray` shape `(N, 3)`
 - Joint angles in degrees, ZYX Euler sequence, columns = [flexion, abduction, rotation]
-- Timestamps derived from `LoopCnt` CSV column, normalized to start at 0.0
+- Timestamps derived from `LoopCnt` CSV column (legacy) or `common/time` H5 dataset (ms), normalized to start at 0.0
 
 ### File Formats
 - `.csv`/`.txt`/`.dat`: Raw IMU data (columns: `TrunkIMU_QuatW`, `L_THIGH_IMU_AccX`, etc.)
+- `.h5`: HDF5 dataset (hierarchy: Subject > Activity > Level > Trial, 7 sensors at 100 Hz, quaternions as `quat_w/x/y/z` scalar-first)
 - `.mcp`: Processed data (JSON with numpy arrays as lists)
 - `.cal`: Calibration offsets (JSON with version compatibility)
 - `.subject`: Subject anthropometric info (JSON with height, shoe size, segment ratios)
 
-All data files live under `data/` (gitignored). Each subject session is a subfolder (e.g., `data/PJS_20260119/`).
+All data files live under `data/` (gitignored). Legacy per-session CSV data lives under `data/legacy/`. HDF5 files live directly under `data/`.
 
 ## Branching
 

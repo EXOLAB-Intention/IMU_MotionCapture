@@ -16,7 +16,7 @@ print("N-pose Calibration 테스트")
 print("="*70)
 
 # Load N-pose data
-npose_file = Path("data/PJS_20260119/PJS_20260119_Npose_processed.csv")
+npose_file = Path("data/legacy/PJS_20260119/PJS_20260119_Npose_processed.csv")
 if not npose_file.exists():
     print(f"❌ N-pose file not found: {npose_file}")
     sys.exit(1)
@@ -29,7 +29,7 @@ if npose_data is None:
     print("❌ Failed to load N-pose data")
     sys.exit(1)
 
-print(f"✓ 로드 완료: {npose_data.imu_data['trunk'].duration:.2f}초")
+print(f"✓ 로드 완료: {npose_data.imu_data['back'].duration:.2f}초")
 
 # Show raw quaternions at start of N-pose
 print(f"\n📊 N-pose 시작 시점의 Raw Quaternions (t=0.5s):")
@@ -72,7 +72,7 @@ joint_angles = kinematics.compute_joint_angles(calibrated_npose)
 print(f"\n✅ N-pose 관절 각도 (t=0.5s ~ 2.5s 평균):")
 print(f"   (N-pose에서는 모든 각도가 0도에 가까워야 함)")
 
-fs = calibrated_npose.imu_data['trunk'].sampling_frequency
+fs = calibrated_npose.imu_data['back'].sampling_frequency
 start_idx = int(0.5 * fs)
 end_idx = int(2.5 * fs)
 
