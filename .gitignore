@@ -84,5 +84,8 @@ env/
 *.cal
 *.subject
 
+# Claude Code
+.claude/
+
 # Data files
 data/
