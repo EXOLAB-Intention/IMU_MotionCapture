@@ -66,44 +66,35 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout()
         
         # ====================================================================
-        # LEFT PANEL: Subject Info (top) + Notes (bottom) - Vertical split
+        # LEFT PANEL: Tabbed info (Subject/Notes) + Navigator
         # ====================================================================
         left_panel = QSplitter(Qt.Vertical)
-        left_panel.setMaximumWidth(350)
-        
-        # Subject info panel (top)
+        left_panel.setMinimumWidth(360)
+        left_panel.setMaximumWidth(520)
+
         self.subject_info = SubjectInfoPanel()
-        left_panel.addWidget(self.subject_info)
-        
-        # Notes panel (bottom)
         self.notes = NotesPanel()
-        left_panel.addWidget(self.notes)
-        
-        # Set initial sizes (roughly equal)
-        left_panel.setSizes([175, 175])
-        
-        main_layout.addWidget(left_panel)
-        
-        # ====================================================================
-        # RIGHT PANEL: Main View (top) + Navigator (bottom) - Adjustable splitter
-        # ====================================================================
-        right_panel = QSplitter(Qt.Vertical)
-        
-        # Main view (top - 3D visualization and graphs)
-        self.main_view = MainView()
-        right_panel.addWidget(self.main_view)
-        
-        # Navigator (bottom)
+
+        info_tabs = QTabWidget()
+        info_tabs.addTab(self.subject_info, "Subject Info")
+        info_tabs.addTab(self.notes, "Notes")
+        left_panel.addWidget(info_tabs)
+
         self.navigator = NavigatorPanel()
-        right_panel.addWidget(self.navigator)
-        
-        # Set initial sizes (5:5 ratio for better balance - 450:450)
-        # User can adjust with mouse
-        right_panel.setSizes([450, 450])
-        right_panel.setStretchFactor(0, 1)  # Main view stretches
-        right_panel.setStretchFactor(1, 1)  # Navigator stretches equally
-        
-        main_layout.addWidget(right_panel, stretch=1)
+        left_panel.addWidget(self.navigator)
+
+        # Give navigator more vertical room by default
+        left_panel.setSizes([260, 640])
+        left_panel.setStretchFactor(0, 0)
+        left_panel.setStretchFactor(1, 1)
+
+        main_layout.addWidget(left_panel, stretch=0)
+
+        # ====================================================================
+        # RIGHT PANEL: Main View only
+        # ====================================================================
+        self.main_view = MainView()
+        main_layout.addWidget(self.main_view, stretch=1)
         
         central_widget.setLayout(main_layout)
     

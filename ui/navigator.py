@@ -294,6 +294,12 @@ class NavigatorPanel(QWidget):
             status = "Config"
             color = QColor(200, 150, 200)  # Pink for subject info
             is_processed = False
+
+        elif ext == '.h5':
+            file_type = "H5"
+            status = "Browse"
+            color = QColor(120, 190, 240)  # Blue-cyan for H5 container
+            is_processed = "h5_file"
             
         else:
             file_type = "File"
@@ -316,6 +322,9 @@ class NavigatorPanel(QWidget):
             return
         if item_type == "h5_group":
             self.status_label.setText(f"Group: {item.text(0)}")
+            return
+        if item_type == "h5_file" and filepath:
+            self.status_label.setText(f"H5 file: {os.path.basename(filepath)} (double-click to browse)")
             return
 
         if filepath:
@@ -340,6 +349,11 @@ class NavigatorPanel(QWidget):
         if item_type == "h5_group":
             # Toggle H5 group expansion
             item.setExpanded(not item.isExpanded())
+            return
+
+        if item_type == "h5_file" and filepath:
+            # Enter H5 browsing mode instead of raw import
+            self.set_h5_file(filepath)
             return
 
         if filepath:
