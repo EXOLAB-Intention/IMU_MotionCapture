@@ -678,17 +678,15 @@ class Visualization3D(QWidget):
             thigh_local_dir = np.array([-self.SEGMENT_LENGTHS['thigh'], 0.0, 0.0])
             shank_local_dir = np.array([-self.SEGMENT_LENGTHS['shank'], 0.0, 0.0])
             
-            # =======================================================================
-            # VRU-AHS
-            # =======================================================================
-            # foot: IMU x-axis points BACKWARD → local -X is segment direction
-            foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
-
-            # =======================================================================
-            # North Reference
-            # =======================================================================
-            # foot: IMU z-axis points FORWARD → local +Z is segment direction
-            # foot_local_dir = np.array([0.0, 0.0, self.SEGMENT_LENGTHS['foot']])
+            # foot direction depends on calibration filter type
+            filter_type = getattr(self.current_data, 'filter_type', 'North-Reference')
+            if filter_type == "VRU-AHS":
+                # VRU-AHS: physical tilt preserved, foot -X points forward
+                foot_local_dir = np.array([-self.SEGMENT_LENGTHS['foot'], 0.0, 0.0])
+            else:
+                # North-Reference: all segments share same desired frame,
+                # foot forward is +Z (90° from shank's -X)
+                foot_local_dir = np.array([0.0, 0.0, self.SEGMENT_LENGTHS['foot']])
             
             # Hip offsets in back's local frame
             # With unified coordinate system: y-right, so right hip is +Y, left hip is -Y
