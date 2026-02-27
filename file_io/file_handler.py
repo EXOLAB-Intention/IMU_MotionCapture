@@ -249,6 +249,50 @@ class FileHandler:
         print(f"Importing TXT from {filepath}")
         
         return data
+
+    @staticmethod
+    def _get_h5_open_candidates(filepath: str) -> List[str]:
+        """Build candidate paths for robust HDF5 open on Windows unicode paths."""
+        abs_path = os.path.abspath(filepath)
+        candidates = [filepath, abs_path]
+
+        if os.name == 'nt':
+            try:
+                rel_path = os.path.relpath(abs_path, os.getcwd())
+                if not rel_path.startswith('..') and os.path.exists(rel_path):
+                    candidates.append(rel_path)
+            except Exception:
+                pass
+
+            try:
+                import ctypes
+                short_buffer = ctypes.create_unicode_buffer(32768)
+                if ctypes.windll.kernel32.GetShortPathNameW(abs_path, short_buffer, len(short_buffer)):
+                    short_path = short_buffer.value
+                    if short_path:
+                        candidates.append(short_path)
+            except Exception:
+                pass
+
+        unique_candidates = []
+        for candidate in candidates:
+            if candidate and candidate not in unique_candidates:
+                unique_candidates.append(candidate)
+        return unique_candidates
+
+    @staticmethod
+    def _open_h5_file(filepath: str, mode: str = 'r'):
+        """Open HDF5 file with fallbacks for environments that fail on unicode absolute paths."""
+        import h5py
+
+        open_errors = []
+        for candidate_path in FileHandler._get_h5_open_candidates(filepath):
+            try:
+                return h5py.File(candidate_path, mode)
+            except OSError as e:
+                open_errors.append(f"{candidate_path} -> {e}")
+
+        raise OSError("Unable to open HDF5 file. " + " | ".join(open_errors))
     
     @staticmethod
     def import_h5_trial(filepath: str, h5_path: str) -> MotionCaptureData:
@@ -280,7 +324,7 @@ class FileHandler:
 
         print(f"Importing HDF5 trial: {filepath} [{h5_path}]")
 
-        with h5py.File(filepath, 'r') as f:
+        with FileHandler._open_h5_file(filepath, 'r') as f:
             if h5_path not in f:
                 raise ValueError(f"Trial path '{h5_path}' not found in HDF5 file")
 
@@ -381,7 +425,7 @@ class FileHandler:
         structure = {}
 
         try:
-            with h5py.File(filepath, 'r') as f:
+            with FileHandler._open_h5_file(filepath, 'r') as f:
                 for subject_id in f:
                     subject_grp = f[subject_id]
                     if not isinstance(subject_grp, h5py.Group):
@@ -428,7 +472,7 @@ class FileHandler:
         """
         import h5py
 
-        with h5py.File(filepath, 'r') as f:
+        with FileHandler._open_h5_file(filepath, 'r') as f:
             si_path = f"{subject_id}/sub_info"
             if si_path not in f:
                 raise ValueError(f"sub_info not found for {subject_id}")
