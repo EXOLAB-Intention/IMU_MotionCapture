@@ -226,31 +226,6 @@ class CalibrationProcessor:
         
         return q_heading
     
-    @staticmethod
-    def _average_quaternions(quaternions: np.ndarray) -> np.ndarray:
-        """
-        Average multiple quaternions using eigenvalue method.
-        
-        Args:
-            quaternions: (N, 4) array of quaternions [w, x, y, z]
-            
-        Returns:
-            Average quaternion [w, x, y, z]
-        """
-        if len(quaternions) == 0:
-            raise ValueError("No quaternions provided for averaging")
-        
-        # Ensure consistent hemisphere (all quaternions pointing same direction)
-        q0 = quaternions[0]
-        for i in range(1, len(quaternions)):
-            if np.dot(quaternions[i], q0) < 0:
-                quaternions[i] = -quaternions[i]
-        
-        # Eigenvalue method for averaging
-        M = np.dot(quaternions.T, quaternions)
-        eigenvalues, eigenvectors = np.linalg.eigh(M)
-        avg_quat = eigenvectors[:, np.argmax(eigenvalues)]
-        return avg_quat / np.linalg.norm(avg_quat)
     
     def calibrate(
         self,
@@ -285,7 +260,7 @@ class CalibrationProcessor:
             calib_quats_norm = calib_quats / norms
 
             # Average quaternions to get q_calib
-            q_calib = self._average_quaternions(calib_quats_norm)
+            q_calib = KinematicsProcessor._average_quaternions(calib_quats_norm)
             self.calib_quaternions[location] = q_calib.copy()
 
         # Determine walking direction from back local +Z (project to global XY)
@@ -364,15 +339,6 @@ class CalibrationProcessor:
         data.calibration_duration = end_time - start_time
         data.calibration_start_time = start_time
         print(f"{pose_type} [{filter_type}] calibration complete!")
-    
-    def _average_quaternions(self, quaternions: np.ndarray) -> np.ndarray:
-        """Average multiple quaternions using eigenvalue method."""
-        if len(quaternions) == 0:
-            raise ValueError("No quaternions provided for averaging")
-        M = np.dot(quaternions.T, quaternions)
-        eigenvalues, eigenvectors = np.linalg.eigh(M)
-        avg_quat = eigenvectors[:, np.argmax(eigenvalues)]
-        return avg_quat / np.linalg.norm(avg_quat)
     
     def get_offset_quaternion(self, location: str) -> Optional[np.ndarray]:
         """Get offset quaternion for a sensor location"""

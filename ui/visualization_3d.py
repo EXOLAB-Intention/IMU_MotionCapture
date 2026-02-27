@@ -7,6 +7,7 @@ from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot
 import numpy as np
 
 from config.settings import app_settings
+from core.segment_positions import compute_joint_positions
 
 try:
     import pyqtgraph as pg
@@ -82,6 +83,7 @@ class Visualization3D(QWidget):
         self.skeleton_items = {}
         self.joint_items = {}
         self.axis_items = {}  # Segment coordinate axes
+        self.foot_markers = {}  # XY foot contact markers
         self.grid = None  # Grid item for ground plane
         self.grid_scale = 0.4  # Store grid scale (larger for better visibility)
         
@@ -386,10 +388,13 @@ class Visualization3D(QWidget):
         for axes in self.axis_items.values():
             for axis in axes:
                 self.view_widget.removeItem(axis)
+        for marker in self.foot_markers.values():
+            self.view_widget.removeItem(marker)
         
         self.skeleton_items.clear()
         self.joint_items.clear()
         self.axis_items.clear()
+        self.foot_markers.clear()
         
         current_mode = app_settings.mode.mode_type
         if current_mode == 'Upper-body':
@@ -472,6 +477,23 @@ class Visualization3D(QWidget):
             self.view_widget.addItem(z_axis)
             
             self.axis_items[segment_name] = [x_axis, y_axis, z_axis]
+
+        # Foot contact markers (XY projection)
+        self.foot_markers['right'] = gl.GLScatterPlotItem(
+            pos=np.empty((0, 3)),
+            size=8,
+            color=(1.0, 0.0, 0.0, 1.0),
+            pxMode=True
+        )
+        self.view_widget.addItem(self.foot_markers['right'])
+
+        self.foot_markers['left'] = gl.GLScatterPlotItem(
+            pos=np.empty((0, 3)),
+            size=8,
+            color=(0.2, 0.6, 1.0, 1.0),
+            pxMode=True
+        )
+        self.view_widget.addItem(self.foot_markers['left'])
     
     def _render_frame(self, frame_index: int):
         """
@@ -506,6 +528,9 @@ class Visualization3D(QWidget):
         
         # Update grid position based on foot contact
         self._update_grid_position(frame_index, positions)
+
+        # Update XY foot contact markers on the grid
+        self._update_foot_markers(frame_index, positions)
         
         # Emit signal AFTER all updates complete (only if not updating from external source)
         if not self._updating:
@@ -933,6 +958,35 @@ class Visualization3D(QWidget):
         self.grid.resetTransform()
         self.grid.scale(self.grid_scale, self.grid_scale, self.grid_scale)
         self.grid.translate(grid_translate_x, grid_translate_y, self.grid_offset[2])
+
+    def _update_foot_markers(self, frame_index: int, positions: dict):
+        """Update XY foot contact markers on the grid."""
+        if not PYQTGRAPH_AVAILABLE or not self.foot_markers:
+            return
+
+        if self.foot_contact_right is None or self.foot_contact_left is None:
+            return
+
+        if frame_index >= len(self.foot_contact_right) or frame_index >= len(self.foot_contact_left):
+            return
+
+        foot_right_center = (positions['toe_right'] + positions['ankle_right']) / 2
+        foot_left_center = (positions['toe_left'] + positions['ankle_left']) / 2
+
+        right_pos = foot_right_center.copy()
+        right_pos[2] = 0.0
+        left_pos = foot_left_center.copy()
+        left_pos[2] = 0.0
+
+        if self.foot_contact_right[frame_index]:
+            self.foot_markers['right'].setData(pos=np.array([right_pos]))
+        else:
+            self.foot_markers['right'].setData(pos=np.empty((0, 3)))
+
+        if self.foot_contact_left[frame_index]:
+            self.foot_markers['left'].setData(pos=np.array([left_pos]))
+        else:
+            self.foot_markers['left'].setData(pos=np.empty((0, 3)))
     
     def _toggle_playback(self):
         """Toggle play/pause"""

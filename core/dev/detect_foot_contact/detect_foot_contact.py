@@ -42,7 +42,7 @@ def detect_foot_contact(
     accel_threshold_weight: float,
     gyro_threshold: float,
     window_size: int = 10,
-    min_contact_duration: int = 20
+    min_contact_duration: int = 40
 ) -> Tuple[int, int, np.ndarray, np.ndarray]:
     """
     Detect foot contact events from IMU data
@@ -201,37 +201,20 @@ def _enforce_gait_constraints(
         
         if both_contact:
             # Rule 1: Remove simultaneous contact
-            # Keep the foot that contacted earlier (look back to find which one contacted first)
-            if i == start_frame:
-                # At start, keep both or arbitrarily choose one (keep right)
-                pass
+            # Keep the foot that was already in single support just before this frame.
+            last_single = None
+            for j in range(i - 1, start_frame - 1, -1):
+                if right[j] != left[j]:
+                    last_single = 'right' if right[j] else 'left'
+                    break
+
+            if last_single == 'right':
+                left[i] = False
+            elif last_single == 'left':
+                right[i] = False
             else:
-                # Find which foot broke contact first before this frame
-                # by looking backward for the most recent contact change
-                right_contact_frame = -1
-                left_contact_frame = -1
-                
-                for j in range(i - 1, start_frame - 1, -1):
-                    if not right[j] and right_contact_frame == -1:
-                        right_contact_frame = j
-                    if not left[j] and left_contact_frame == -1:
-                        left_contact_frame = j
-                    if right_contact_frame != -1 and left_contact_frame != -1:
-                        break
-                
-                # The foot that broke contact later should be kept contacting
-                # (i.e., the one with larger frame index of non-contact)
-                if right_contact_frame > left_contact_frame:
-                    # Right broke contact more recently, so it re-established first
-                    # Keep right, remove left
-                    left[i] = False
-                elif left_contact_frame > right_contact_frame:
-                    # Left broke contact more recently, so it re-established first
-                    # Keep left, remove right
-                    right[i] = False
-                else:
-                    # Both broke contact at same frame - shouldn't happen, keep right
-                    left[i] = False
+                # Fallback: keep right if no prior single support found
+                left[i] = False
         
         elif both_notcontact:
             # Rule 2: Remove simultaneous non-contact
@@ -462,15 +445,15 @@ def main():
         timestamps, accelerations, gyroscopes = load_csv_data(csv_file)
         print(f"\nLoaded {len(timestamps)} samples\n")
         
-        # Calculate thresholds
-        accel_thresholds = compute_reference_values(
-            accelerations,
-            timestamps,
-            frame_start=calibration_frame_start,
-            frame_end=calibration_frame_end
-        )
-        accel_threshold_weight = 0.2
-        gyro_threshold = 0.5
+        # Use default thresholds
+        accel_thresholds = {
+            'L_FOOT': 10.0,
+            'R_FOOT': 10.0,
+        }
+        val_accel_threshold_weight = 0.2
+        val_gyro_threshold = 0.5
+        val_window_size = 10
+        val_min_contact_duration = 40
         
         # Detect foot contact for both feet using modified detect_foot_contact logic
         # First, detect raw contact for each foot
@@ -478,9 +461,13 @@ def main():
         for foot in accelerations.keys():
             a_thr = accel_thresholds.get(foot)
             foot_contact_raw[foot] = _detect_contact_single(
-                accelerations[foot], gyroscopes[foot],
-                a_thr, accel_threshold_weight, gyro_threshold,
-                window_size=10, min_contact_duration=40
+                accelerations=accelerations[foot],
+                gyroscopes=gyroscopes[foot],
+                accel_threshold=a_thr,
+                accel_threshold_weight=val_accel_threshold_weight,
+                gyro_threshold=val_gyro_threshold,
+                window_size=val_window_size,
+                min_contact_duration=val_min_contact_duration
             )
         
         # Process gait cycle to get gait frames and modified contact arrays
@@ -502,8 +489,8 @@ def main():
         
         plot_results(timestamps, accelerations, gyroscopes, foot_contact,
                     accel_threshold=accel_thresholds,
-                    accel_threshold_weight=accel_threshold_weight,
-                    gyro_threshold=gyro_threshold,
+                    accel_threshold_weight=val_accel_threshold_weight,
+                    gyro_threshold=val_gyro_threshold,
                     frame_start=calculation_frame_start,
                     frame_end=calculation_frame_end)
     except Exception as e:
