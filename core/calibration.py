@@ -192,7 +192,7 @@ class CalibrationProcessor:
 
         return desired
     
-    FILTER_TYPES = ["VRU-AHS", "North-Reference"]
+    FILTER_TYPES = ["North-Reference", "VRU-AHS"]
 
     def __init__(self):
         self.offset_quaternions: Dict[str, np.ndarray] = {}    # q_offset for each segment
@@ -201,7 +201,7 @@ class CalibrationProcessor:
         self.heading_offset: Optional[np.ndarray] = None
         self.is_calibrated = False
         self.pose_type: Optional[str] = None
-        self.filter_type: str = "VRU-AHS"  # "VRU-AHS" or "North-Reference"
+        self.filter_type: str = "North-Reference"  # "North-Reference" or "VRU-AHS"
         self.mode: Optional[str] = None
         self.calibration_time: Optional[datetime] = None
         self.subject_id: Optional[str] = None
@@ -259,14 +259,14 @@ class CalibrationProcessor:
         end_time: float,
         pose_type: str = "N-pose",
         mode: str = "Lower-body",
-        filter_type: str = "VRU-AHS"
+        filter_type: str = "North-Reference"
     ):
         """
         Perform calibration pose processing.
 
         Two filter type methods:
-        - VRU-AHS: Yaw-reset calibration. Zeros each sensor's heading (yaw) via LEFT mult.
         - North-Reference: Full orientation alignment via desired quaternions and RIGHT mult.
+        - VRU-AHS: Yaw-reset calibration. Zeros each sensor's heading (yaw) via LEFT mult.
         """
         self.filter_type = filter_type
         print(f"Calibrating with {pose_type} [{filter_type}] in {mode} mode from {start_time:.2f}s to {end_time:.2f}s")
@@ -517,7 +517,7 @@ class CalibrationProcessor:
             print(f"  Heading offset: {-heading_angle:.1f}°")
         
         self.pose_type = calib_data.get('pose_type')
-        self.filter_type = calib_data.get('filter_type', 'VRU-AHS')  # Default for older .cal files
+        self.filter_type = calib_data.get('filter_type', 'North-Reference')  # Default for older .cal files
         self.subject_id = calib_data.get('subject_id')
 
         if calib_data.get('calibration_time'):
@@ -580,6 +580,7 @@ class CalibrationProcessor:
             print(f"  Calibrated {location}: {n_samples} samples")
 
         calibrated_data.calibration_pose = self.pose_type
+        calibrated_data.filter_type = self.filter_type
         print(f"{self.pose_type} [{self.filter_type}] calibration applied successfully!")
         calibrated_data.is_calibrated = True
         return calibrated_data
