@@ -300,8 +300,8 @@ class FileHandler:
         Import a single trial from an HDF5 file.
 
         HDF5 structure: Subject > Activity > Level > Trial, with sensor data under
-        trial/robot/. Quaternions are stored as quat_w/x/y/z (scalar-first [w,x,y,z]),
-        matching this project's convention.
+        trial/robot/imu/ (new) or trial/robot/ (legacy). Quaternions are stored as
+        quat_w/x/y/z (scalar-first [w,x,y,z]), matching this project's convention.
 
         Args:
             filepath: Path to HDF5 file (.h5)
@@ -348,25 +348,36 @@ class FileHandler:
             print(f"  Time range: {timestamps[0]:.3f}s to {timestamps[-1]:.3f}s ({n_samples} samples)")
             print(f"  Sampling frequency: {sampling_freq} Hz")
 
-            # Sensor mapping: H5 path → (location name, sensor_id)
+            # Sensor mapping with path fallbacks: prefer new robot/imu/*, then legacy robot/*
             # hip_imu is skipped (not used in lower-body pipeline)
             sensor_map = [
-                ('robot/back_imu',         'back',        0),
-                ('robot/thigh_imu/left',   'thigh_left',  1),
-                ('robot/thigh_imu/right',  'thigh_right', 2),
-                ('robot/shank_imu/left',   'shank_left',  3),
-                ('robot/shank_imu/right',  'shank_right', 4),
-                ('robot/foot_imu/left',    'foot_left',   5),
-                ('robot/foot_imu/right',   'foot_right',  6),
+                ('back',        0, ['robot/imu/back_imu',       'robot/back_imu']),
+                ('thigh_left',  1, ['robot/imu/thigh_imu/left', 'robot/thigh_imu/left']),
+                ('thigh_right', 2, ['robot/imu/thigh_imu/right','robot/thigh_imu/right']),
+                ('shank_left',  3, ['robot/imu/shank_imu/left', 'robot/shank_imu/left']),
+                ('shank_right', 4, ['robot/imu/shank_imu/right','robot/shank_imu/right']),
+                ('foot_left',   5, ['robot/imu/foot_imu/left',  'robot/foot_imu/left']),
+                ('foot_right',  6, ['robot/imu/foot_imu/right', 'robot/foot_imu/right']),
             ]
 
-            for h5_sensor_path, location, sensor_id in sensor_map:
-                full_path = h5_path + '/' + h5_sensor_path
-                if h5_sensor_path not in trial:
-                    print(f"  Warning: Sensor {h5_sensor_path} not found, skipping")
-                    continue
+            for location, sensor_id, candidate_paths in sensor_map:
+                sensor_grp = None
+                resolved_path = None
 
-                sensor_grp = trial[h5_sensor_path]
+                for candidate in candidate_paths:
+                    try:
+                        sensor_grp = trial[candidate]
+                        resolved_path = candidate
+                        break
+                    except KeyError:
+                        continue
+
+                if sensor_grp is None:
+                    print(
+                        f"  Warning: Sensor for {location} not found "
+                        f"(tried: {', '.join(candidate_paths)}), skipping"
+                    )
+                    continue
 
                 # Check required datasets exist
                 required = ['quat_w', 'quat_x', 'quat_y', 'quat_z',
@@ -375,7 +386,7 @@ class FileHandler:
                 missing = [d for d in required if d not in sensor_grp]
                 if missing:
                     raise ValueError(
-                        f"Sensor {h5_sensor_path} missing datasets: {missing}")
+                        f"Sensor {resolved_path} missing datasets: {missing}")
 
                 # Stack quaternions [w, x, y, z] — scalar-first, matching project convention
                 quaternions = np.column_stack([
