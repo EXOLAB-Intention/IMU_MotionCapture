@@ -58,7 +58,7 @@ class GraphView(QWidget):
 
         # Joint selection
         self.joint_combo = QComboBox()
-        self.joint_combo.addItems(['Hip', 'Knee', 'Ankle', 'Trunk'])
+        self.joint_combo.addItems(['Hip', 'Knee', 'Ankle', 'Back'])
         self.update_mode_selection()
         self.joint_combo.currentTextChanged.connect(self._update_graph)
         
@@ -128,7 +128,7 @@ class GraphView(QWidget):
             joints = ['Spine', 'Neck', 'Shoulder', 'Elbow']
         else:
             # Lower body
-            joints = ['Hip', 'Knee', 'Ankle', 'Trunk']
+            joints = ['Hip', 'Knee', 'Ankle', 'Back']
         self.joint_combo.addItems(joints)
         
         # Restore previous selection if still valid
@@ -189,8 +189,8 @@ class GraphView(QWidget):
 
         joint = self.joint_combo.currentText().lower()
 
-        if joint == 'trunk':
-            self._update_trunk_view()
+        if joint == 'back':
+            self._update_back_view()
             return
 
         self.right_check.setEnabled(True)
@@ -245,31 +245,31 @@ class GraphView(QWidget):
 
         self.axes[0].set_title(f'{joint.capitalize()} Joint Angles', fontsize=12, fontweight='bold')
 
-    def _update_trunk_view(self):
-        """Render trunk orientation plots (yaw, roll, pitch)."""
+    def _update_back_view(self):
+        """Render back orientation plots (yaw, roll, pitch)."""
         self.right_check.setEnabled(False)
         self.left_check.setEnabled(False)
 
-        if not self.current_data.kinematics or self.current_data.kinematics.trunk_angle is None:
+        if not self.current_data.kinematics or self.current_data.kinematics.back_angle is None:
             for ax in self.axes:
-                ax.text(0.5, 0.5, 'No trunk orientation data', ha='center', va='center', transform=ax.transAxes)
+                ax.text(0.5, 0.5, 'No back orientation data', ha='center', va='center', transform=ax.transAxes)
                 ax.grid(True, alpha=0.3)
             return
 
-        trunk_angles = self.current_data.kinematics.trunk_angle
+        back_angles = self.current_data.kinematics.back_angle
         timestamps = self.current_data.kinematics.timestamps
 
         # Stored order is [roll(x), pitch(y), yaw(z)] in local frame
         # Map local -> global: x -> z, y -> -y, z -> x
         # Display order: Yaw, Roll, Pitch (global frame)
-        series = [trunk_angles[:, 0], trunk_angles[:, 2], -trunk_angles[:, 1]]
+        series = [back_angles[:, 0], back_angles[:, 2], -back_angles[:, 1]]
         labels = ['Yaw', 'Roll', 'Pitch']
 
         for i, ax in enumerate(self.axes):
             if len(series[i]) > 0:
                 # Unwrap to avoid 0/180 deg flips, keep measured values
                 series[i] = np.degrees(np.unwrap(np.radians(series[i])))
-            ax.plot(timestamps, series[i], 'k-', label='Trunk')
+            ax.plot(timestamps, series[i], 'k-', label='Back')
             ax.set_ylabel(f'{labels[i]}\n(deg)', fontsize=10)
             ax.grid(True, alpha=0.3)
             ax.legend(loc='upper right')
@@ -291,7 +291,7 @@ class GraphView(QWidget):
             else:
                 ax.set_xlabel('Time (s)', fontsize=10)
 
-        self.axes[0].set_title('Trunk Orientation', fontsize=12, fontweight='bold')
+        self.axes[0].set_title('Back Orientation', fontsize=12, fontweight='bold')
 
     def _update_gait_view(self):
         """Render stride distance, gait speed, and foot contact plots."""
@@ -400,8 +400,8 @@ class GraphView(QWidget):
         # Determine default filename based on view mode
         if self.view_mode == 'joint':
             joint = self.joint_combo.currentText().lower()
-            if joint == 'trunk':
-                default_name = "trunk_orientation.png"
+            if joint == 'back':
+                default_name = "back_orientation.png"
             else:
                 default_name = f"{joint}_angles.png"
         else:
@@ -484,15 +484,15 @@ class GraphView(QWidget):
                     data_dict['L_Ankle_Flexion'] = self.current_data.joint_angles.ankle_left[:, 0]
                     data_dict['L_Ankle_Abduction'] = self.current_data.joint_angles.ankle_left[:, 1]
                     data_dict['L_Ankle_Rotation'] = self.current_data.joint_angles.ankle_left[:, 2]
-                elif item == 'Trunk':
-                    # Unwrap trunk angles and map local -> global like in graph view
-                    trunk_angles = self.current_data.kinematics.trunk_angle
-                    roll_global = np.degrees(np.unwrap(np.radians(trunk_angles[:, 2])))
-                    yaw_global = np.degrees(np.unwrap(np.radians(trunk_angles[:, 0])))
-                    pitch_global = -np.degrees(np.unwrap(np.radians(trunk_angles[:, 1])))
-                    data_dict['Trunk_Roll'] = roll_global
-                    data_dict['Trunk_Yaw'] = yaw_global
-                    data_dict['Trunk_Pitch'] = pitch_global
+                elif item == 'Back':
+                    # Unwrap back angles and map local -> global like in graph view
+                    back_angles = self.current_data.kinematics.back_angle
+                    roll_global = np.degrees(np.unwrap(np.radians(back_angles[:, 2])))
+                    yaw_global = np.degrees(np.unwrap(np.radians(back_angles[:, 0])))
+                    pitch_global = -np.degrees(np.unwrap(np.radians(back_angles[:, 1])))
+                    data_dict['Back_Roll'] = roll_global
+                    data_dict['Back_Yaw'] = yaw_global
+                    data_dict['Back_Pitch'] = pitch_global
                 elif item == 'Stride':
                     # Stride is sparse - only at transition points
                     stride_col = np.full(len(timestamps), np.nan)
@@ -505,6 +505,25 @@ class GraphView(QWidget):
                     data_dict['R_FootContact'] = self.current_data.kinematics.foot_contact_right.astype(int)
                 elif item == 'L_FootContact':
                     data_dict['L_FootContact'] = self.current_data.kinematics.foot_contact_left.astype(int)
+                elif item == 'Foot_Abs_Dorsiflexion':
+                    right_thigh_y = self._compute_segment_local_y_rotation_from_initial('thigh_right')
+                    left_thigh_y = self._compute_segment_local_y_rotation_from_initial('thigh_left')
+                    right_shank_y = self._compute_segment_local_y_rotation_from_initial('shank_right')
+                    left_shank_y = self._compute_segment_local_y_rotation_from_initial('shank_left')
+                    right_local_y, left_local_y = self._compute_foot_local_y_rotation_from_initial()
+
+                    if right_thigh_y is not None:
+                        data_dict['R_Thigh_LocalY_Rotation'] = self._fit_series_length(right_thigh_y, len(timestamps))
+                    if left_thigh_y is not None:
+                        data_dict['L_Thigh_LocalY_Rotation'] = self._fit_series_length(left_thigh_y, len(timestamps))
+                    if right_shank_y is not None:
+                        data_dict['R_Shank_LocalY_Rotation'] = self._fit_series_length(right_shank_y, len(timestamps))
+                    if left_shank_y is not None:
+                        data_dict['L_Shank_LocalY_Rotation'] = self._fit_series_length(left_shank_y, len(timestamps))
+                    if right_local_y is not None:
+                        data_dict['R_Foot_LocalY_Rotation'] = self._fit_series_length(right_local_y, len(timestamps))
+                    if left_local_y is not None:
+                        data_dict['L_Foot_LocalY_Rotation'] = self._fit_series_length(left_local_y, len(timestamps))
             
             # Create DataFrame and save
             df = pd.DataFrame(data_dict)
@@ -513,6 +532,63 @@ class GraphView(QWidget):
             QMessageBox.information(self, "Export Successful", f"Data exported to:\n{file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", f"Error exporting CSV:\n{str(e)}")
+
+    @staticmethod
+    def _fit_series_length(series: np.ndarray, target_len: int) -> np.ndarray:
+        """Trim or NaN-pad a 1D series to target length."""
+        series = np.asarray(series, dtype=float).reshape(-1)
+        if len(series) == target_len:
+            return series
+        if len(series) > target_len:
+            return series[:target_len]
+
+        padded = np.full(target_len, np.nan, dtype=float)
+        padded[:len(series)] = series
+        return padded
+
+    def _compute_foot_local_y_rotation_from_initial(self):
+        """Compute foot local-y rotation from initial foot IMU orientation.
+
+        q_rel = conj(q0) * q_t is represented in the initial local frame.
+        We extract the twist component around local y-axis directly from q_rel,
+        avoiding Euler-axis ambiguity.
+        """
+        if not self.current_data or not self.current_data.imu_data:
+            return None, None
+
+        return (
+            self._compute_segment_local_y_rotation_from_initial('foot_right'),
+            self._compute_segment_local_y_rotation_from_initial('foot_left')
+        )
+
+    def _compute_segment_local_y_rotation_from_initial(self, location: str):
+        """Compute segment local-y rotation from initial quaternion for one sensor location."""
+        if not self.current_data or not self.current_data.imu_data:
+            return None
+
+        from core.kinematics import KinematicsProcessor
+
+        sensor = self.current_data.imu_data.get(location)
+        if sensor is None or sensor.quaternions is None or len(sensor.quaternions) == 0:
+            return None
+
+        q_series = KinematicsProcessor.quaternion_normalize(np.asarray(sensor.quaternions, dtype=float))
+        q0 = q_series[0]
+        q_rel = KinematicsProcessor.compute_relative_quaternion(q0, q_series)
+
+        # Twist angle around local y axis from q_rel = [w, x, y, z].
+        q_rel = KinematicsProcessor.quaternion_normalize(q_rel)
+        w = np.asarray(q_rel[:, 0], dtype=float)
+        y = np.asarray(q_rel[:, 2], dtype=float)
+        local_y_rad = 2.0 * np.arctan2(y, w)
+        local_y_rad = np.unwrap(local_y_rad)
+        local_y_deg = np.degrees(local_y_rad)
+
+        if len(local_y_deg) > 0:
+            local_y_deg = local_y_deg - local_y_deg[0]
+            local_y_deg[np.abs(local_y_deg) < 1e-12] = 0.0
+
+        return local_y_deg
     
     def clear(self):
         """Clear graph"""
@@ -549,16 +625,16 @@ class ExportCSVDialog(QDialog):
         joint_group.setLayout(joint_layout)
         layout.addWidget(joint_group)
         
-        # Trunk section
-        trunk_group = QGroupBox("Trunk")
-        trunk_layout = QVBoxLayout()
+        # Back section
+        back_group = QGroupBox("Back")
+        back_layout = QVBoxLayout()
         
-        trunk_cb = QCheckBox("Trunk (Yaw, Roll, Pitch)")
-        self.check_items['Trunk'] = trunk_cb
-        trunk_layout.addWidget(trunk_cb)
+        back_cb = QCheckBox("Back (Yaw, Roll, Pitch)")
+        self.check_items['Back'] = back_cb
+        back_layout.addWidget(back_cb)
         
-        trunk_group.setLayout(trunk_layout)
-        layout.addWidget(trunk_group)
+        back_group.setLayout(back_layout)
+        layout.addWidget(back_group)
         
         # Gait section
         gait_group = QGroupBox("Gait")
@@ -575,6 +651,17 @@ class ExportCSVDialog(QDialog):
         
         gait_group.setLayout(gait_layout)
         layout.addWidget(gait_group)
+
+        # Segment absolute section
+        abs_group = QGroupBox("Segment Absolute")
+        abs_layout = QVBoxLayout()
+
+        foot_abs_cb = QCheckBox("Thigh/Shank/Foot Local-Y Rotation (green axis, from initial quaternion)")
+        self.check_items['Foot_Abs_Dorsiflexion'] = foot_abs_cb
+        abs_layout.addWidget(foot_abs_cb)
+
+        abs_group.setLayout(abs_layout)
+        layout.addWidget(abs_group)
         
         # Select All / Deselect All buttons
         button_layout = QHBoxLayout()

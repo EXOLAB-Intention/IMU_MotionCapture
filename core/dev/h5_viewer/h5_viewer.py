@@ -46,15 +46,25 @@ class H5Viewer(QMainWindow):
         self.open_btn = QPushButton("Open H5")
         self.open_btn.clicked.connect(self.open_file_dialog)
 
-        self.export_btn = QPushButton("Export Selected CSV")
+        self.export_btn = QPushButton("Export Selected to CSV")
         self.export_btn.clicked.connect(self.export_selected_to_csv)
         self.export_btn.setEnabled(False)
+
+        self.export_mocap_btn = QPushButton("Export Mocap Angle Data")
+        self.export_mocap_btn.clicked.connect(self.export_mocap_angle_data)
+        self.export_mocap_btn.setEnabled(False)
+
+        self.export_abs_mocap_foot_btn = QPushButton("Export Absolute Mocap Angle Data (Foot)")
+        self.export_abs_mocap_foot_btn.clicked.connect(self.export_absolute_mocap_foot_angle_data)
+        self.export_abs_mocap_foot_btn.setEnabled(False)
 
         self.path_label = QLabel("No H5 file loaded")
         self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         top_bar.addWidget(self.open_btn)
         top_bar.addWidget(self.export_btn)
+        top_bar.addWidget(self.export_mocap_btn)
+        top_bar.addWidget(self.export_abs_mocap_foot_btn)
         top_bar.addWidget(self.path_label, 1)
 
         self.tree = QTreeWidget()
@@ -143,6 +153,8 @@ class H5Viewer(QMainWindow):
         self.tree.clear()
         self.detail.clear()
         self.export_btn.setEnabled(False)
+        self.export_mocap_btn.setEnabled(False)
+        self.export_abs_mocap_foot_btn.setEnabled(False)
 
         try:
             h5_file, used_path = self._open_h5(filepath)
@@ -214,6 +226,9 @@ class H5Viewer(QMainWindow):
 
         items = self.tree.selectedItems()
         self.export_btn.setEnabled(len(items) > 0)
+        has_single_kin_q = self._get_selected_single_kin_q_path() is not None
+        self.export_mocap_btn.setEnabled(has_single_kin_q)
+        self.export_abs_mocap_foot_btn.setEnabled(has_single_kin_q)
         if not items:
             return
 
@@ -237,6 +252,307 @@ class H5Viewer(QMainWindow):
         safe = text.replace("/", "__").replace("\\", "__")
         safe = "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in safe)
         return safe.strip("_") or "dataset"
+
+    def _find_kin_q_groups(self, group_obj, prefix):
+        kin_q_paths = []
+        for key in sorted(group_obj.keys()):
+            child = group_obj[key]
+            child_path = f"{prefix}/{key}" if prefix else key
+            if isinstance(child, h5py.Group):
+                if key == "kin_q":
+                    kin_q_paths.append(child_path)
+                kin_q_paths.extend(self._find_kin_q_groups(child, child_path))
+        return kin_q_paths
+
+    def _resolve_kin_q_path_from_item(self, item):
+        if self._h5 is None or item is None:
+            return None
+
+        obj_path = item.data(0, Qt.UserRole)
+        item_type = item.data(1, Qt.UserRole)
+        if not obj_path or item_type != "group" or obj_path not in self._h5:
+            return None
+
+        obj = self._h5[obj_path]
+        if not isinstance(obj, h5py.Group):
+            return None
+
+        if obj_path.split("/")[-1] == "kin_q":
+            return obj_path
+
+        kin_q_paths = self._find_kin_q_groups(obj, obj_path)
+        if len(kin_q_paths) == 1:
+            return kin_q_paths[0]
+
+        return None
+
+    def _get_selected_single_kin_q_path(self):
+        selected_items = self.tree.selectedItems()
+        if len(selected_items) != 1:
+            return None
+        return self._resolve_kin_q_path_from_item(selected_items[0])
+
+    def _dataset_value_to_columns(self, name: str, value):
+        if np.isscalar(value):
+            return [name], [[value]]
+
+        arr = np.asarray(value)
+        if arr.ndim == 0:
+            return [name], [[arr.item()]]
+
+        if arr.ndim == 1:
+            return [name], [arr.tolist()]
+
+        rows_2d = arr.reshape(arr.shape[0], -1)
+        headers = [f"{name}_{i}" for i in range(rows_2d.shape[1])]
+        columns = [rows_2d[:, i].tolist() for i in range(rows_2d.shape[1])]
+        return headers, columns
+
+    def _subtract_initial_value(self, values):
+        if not values:
+            return values
+
+        try:
+            arr = np.asarray(values, dtype=float)
+            normalized = arr - arr[0]
+            return normalized.tolist()
+        except Exception:
+            return values
+
+    def _get_required_1d_series(self, group: h5py.Group, key: str, expected_len: int):
+        if key not in group:
+            raise KeyError(f"Missing dataset: {key}")
+
+        ds = group[key]
+        if not isinstance(ds, h5py.Dataset):
+            raise TypeError(f"{key} is not a dataset")
+
+        values = np.asarray(ds[()]).reshape(-1)
+        if len(values) != expected_len:
+            raise ValueError(
+                f"Length mismatch for {key}: time={expected_len}, data={len(values)}"
+            )
+
+        return values.astype(float)
+
+    def export_absolute_mocap_foot_angle_data(self):
+        if self._h5 is None:
+            QMessageBox.warning(self, "No File", "Open an H5 file first.")
+            return
+
+        kin_q_path = self._get_selected_single_kin_q_path()
+        if kin_q_path is None:
+            QMessageBox.warning(
+                self,
+                "Invalid Selection",
+                "Select exactly one group: either kin_q itself or a parent(trial) containing exactly one kin_q.",
+            )
+            return
+
+        kin_q_group = self._h5[kin_q_path]
+        if "time" not in kin_q_group or not isinstance(kin_q_group["time"], h5py.Dataset):
+            QMessageBox.warning(self, "Missing time", f"time dataset not found in:\n{kin_q_path}")
+            return
+
+        try:
+            time_values = np.asarray(kin_q_group["time"][()]).reshape(-1).astype(float)
+        except Exception as e:
+            QMessageBox.critical(self, "Read Error", f"Failed to read time dataset:\n{e}")
+            return
+
+        if len(time_values) == 0:
+            QMessageBox.warning(self, "Empty time", "time dataset is empty.")
+            return
+
+        try:
+            pelvis_tilt = self._get_required_1d_series(kin_q_group, "pelvis_tilt", len(time_values))
+            hip_flexion_r = self._get_required_1d_series(kin_q_group, "hip_flexion_r", len(time_values))
+            knee_angle_r = self._get_required_1d_series(kin_q_group, "knee_angle_r", len(time_values))
+            ankle_angle_r = self._get_required_1d_series(kin_q_group, "ankle_angle_r", len(time_values))
+            hip_flexion_l = self._get_required_1d_series(kin_q_group, "hip_flexion_l", len(time_values))
+            knee_angle_l = self._get_required_1d_series(kin_q_group, "knee_angle_l", len(time_values))
+            ankle_angle_l = self._get_required_1d_series(kin_q_group, "ankle_angle_l", len(time_values))
+        except Exception as e:
+            QMessageBox.critical(self, "Read Error", str(e))
+            self.status.setText("Absolute mocap foot export failed")
+            return
+
+        # User-defined sagittal chain sign convention.
+        # Thigh = pelvis_tilt + hip_flexion
+        # Shank = pelvis_tilt + hip_flexion - knee_angle
+        # Foot  = pelvis_tilt + hip_flexion - knee_angle + ankle_angle
+        right_thigh_abs = pelvis_tilt + hip_flexion_r
+        left_thigh_abs = pelvis_tilt + hip_flexion_l
+        right_shank_abs = pelvis_tilt + hip_flexion_r - knee_angle_r
+        left_shank_abs = pelvis_tilt + hip_flexion_l - knee_angle_l
+        right_foot_abs = right_shank_abs + ankle_angle_r
+        left_foot_abs = left_shank_abs + ankle_angle_l
+
+        default_name = f"{self._sanitize_name(kin_q_path)}__absolute_segments.csv"
+        output_file, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save absolute mocap segment angle CSV",
+            str(Path.cwd() / default_name),
+            "CSV Files (*.csv)",
+        )
+        if not output_file:
+            return
+
+        if not output_file.lower().endswith('.csv'):
+            output_file += '.csv'
+
+        rows = []
+        for i in range(len(time_values)):
+            rows.append([
+                time_values[i],
+                right_thigh_abs[i],
+                left_thigh_abs[i],
+                right_shank_abs[i],
+                left_shank_abs[i],
+                right_foot_abs[i],
+                left_foot_abs[i],
+            ])
+
+        try:
+            with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "time",
+                    "R Thigh",
+                    "L Thigh",
+                    "R Shank",
+                    "L Shank",
+                    "R Foot",
+                    "L Foot",
+                ])
+                writer.writerows(rows)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+            self.status.setText("Absolute mocap foot export failed")
+            return
+
+        QMessageBox.information(
+            self,
+            "Export Completed",
+            f"Saved CSV:\n{output_file}\n\nRows: {len(rows)}\nColumns: 7",
+        )
+
+        self.status.setText(
+            f"Absolute mocap foot export: {kin_q_path} -> {Path(output_file).name} ({len(rows)} rows)"
+        )
+
+    def export_mocap_angle_data(self):
+        if self._h5 is None:
+            QMessageBox.warning(self, "No File", "Open an H5 file first.")
+            return
+
+        kin_q_path = self._get_selected_single_kin_q_path()
+        if kin_q_path is None:
+            QMessageBox.warning(
+                self,
+                "Invalid Selection",
+                "Select exactly one group: either kin_q itself or a parent(trial) containing exactly one kin_q.",
+            )
+            return
+
+        kin_q_group = self._h5[kin_q_path]
+        if "time" not in kin_q_group or not isinstance(kin_q_group["time"], h5py.Dataset):
+            QMessageBox.warning(self, "Missing time", f"time dataset not found in:\n{kin_q_path}")
+            return
+
+        try:
+            time_values = np.asarray(kin_q_group["time"][()]).reshape(-1).tolist()
+        except Exception as e:
+            QMessageBox.critical(self, "Read Error", f"Failed to read time dataset:\n{e}")
+            return
+
+        if len(time_values) == 0:
+            QMessageBox.warning(self, "Empty time", "time dataset is empty.")
+            return
+
+        headers = ["time"]
+        columns = [time_values]
+        failures = []
+
+        for key in sorted(kin_q_group.keys()):
+            if key == "time":
+                continue
+
+            ds = kin_q_group[key]
+            if not isinstance(ds, h5py.Dataset):
+                continue
+
+            try:
+                ds_headers, ds_columns = self._dataset_value_to_columns(key, ds[()])
+            except Exception as e:
+                failures.append(f"{key}: {e}")
+                continue
+
+            for ds_header, ds_column in zip(ds_headers, ds_columns):
+                if len(ds_column) != len(time_values):
+                    failures.append(
+                        f"{ds_header}: length mismatch (time={len(time_values)}, data={len(ds_column)})"
+                    )
+                    continue
+                headers.append(ds_header)
+                columns.append(self._subtract_initial_value(ds_column))
+
+        if len(headers) == 1:
+            QMessageBox.warning(
+                self,
+                "Export Failed",
+                "No kin_q datasets were exported.\n" + "\n".join(failures[:10]),
+            )
+            self.status.setText("Mocap angle export failed")
+            return
+
+        default_name = f"{self._sanitize_name(kin_q_path)}.csv"
+        output_file, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save mocap angle CSV",
+            str(Path.cwd() / default_name),
+            "CSV Files (*.csv)",
+        )
+        if not output_file:
+            return
+
+        if not output_file.lower().endswith('.csv'):
+            output_file += '.csv'
+
+        rows = []
+        for i in range(len(time_values)):
+            rows.append([col[i] for col in columns])
+
+        try:
+            with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+            self.status.setText("Mocap angle export failed")
+            return
+
+        if failures:
+            QMessageBox.warning(
+                self,
+                "Export Completed (with warnings)",
+                f"Saved CSV:\n{output_file}\n\n"
+                f"Rows: {len(rows)}\n"
+                f"Columns: {len(headers)}\n"
+                f"Skipped datasets: {len(failures)}\n\n"
+                + "\n".join(failures[:10]),
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Export Completed",
+                f"Saved CSV:\n{output_file}\n\nRows: {len(rows)}\nColumns: {len(headers)}",
+            )
+
+        self.status.setText(
+            f"Mocap angle export: {kin_q_path} -> {Path(output_file).name} ({len(rows)} rows, {len(headers)} columns)"
+        )
 
     def _collect_dataset_paths(self, obj_path: str, item_type: str):
         dataset_paths = []
