@@ -65,7 +65,7 @@ All inter-component communication uses PyQt5 signals. `MainWindow._connect_signa
 ### Quaternion Format
 - **[w, x, y, z]** (scalar-first) throughout the codebase
 - Hamilton multiplication convention
-- Calibration uses RIGHT multiplication: `q_offset = conj(q_calib) * q_desired`, applied as `q_segment = q_measured * q_offset`
+- Calibration applies sensor mount offset on the right and initial heading reset on the left: `q_segment = q_heading_correction * (q_measured * q_offset)`
 - Joint angles: `q_rel = conj(q_proximal) * q_distal`
 
 ### Coordinate Frames

@@ -54,9 +54,13 @@ class H5Viewer(QMainWindow):
         self.export_mocap_btn.clicked.connect(self.export_mocap_angle_data)
         self.export_mocap_btn.setEnabled(False)
 
-        self.export_abs_mocap_foot_btn = QPushButton("Export Absolute Mocap Angle Data (Foot)")
+        self.export_abs_mocap_foot_btn = QPushButton("Export Absolute Mocap Angle Data (kin_q)")
         self.export_abs_mocap_foot_btn.clicked.connect(self.export_absolute_mocap_foot_angle_data)
         self.export_abs_mocap_foot_btn.setEnabled(False)
+
+        self.export_abs_mocap_marker_btn = QPushButton("Export Absolute Mocap Angle Data (marker)")
+        self.export_abs_mocap_marker_btn.clicked.connect(self.export_absolute_mocap_marker_angle_data)
+        self.export_abs_mocap_marker_btn.setEnabled(False)
 
         self.path_label = QLabel("No H5 file loaded")
         self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -65,6 +69,7 @@ class H5Viewer(QMainWindow):
         top_bar.addWidget(self.export_btn)
         top_bar.addWidget(self.export_mocap_btn)
         top_bar.addWidget(self.export_abs_mocap_foot_btn)
+        top_bar.addWidget(self.export_abs_mocap_marker_btn)
         top_bar.addWidget(self.path_label, 1)
 
         self.tree = QTreeWidget()
@@ -155,6 +160,7 @@ class H5Viewer(QMainWindow):
         self.export_btn.setEnabled(False)
         self.export_mocap_btn.setEnabled(False)
         self.export_abs_mocap_foot_btn.setEnabled(False)
+        self.export_abs_mocap_marker_btn.setEnabled(False)
 
         try:
             h5_file, used_path = self._open_h5(filepath)
@@ -227,8 +233,10 @@ class H5Viewer(QMainWindow):
         items = self.tree.selectedItems()
         self.export_btn.setEnabled(len(items) > 0)
         has_single_kin_q = self._get_selected_single_kin_q_path() is not None
+        has_single_marker = self._get_selected_single_marker_path() is not None
         self.export_mocap_btn.setEnabled(has_single_kin_q)
         self.export_abs_mocap_foot_btn.setEnabled(has_single_kin_q)
+        self.export_abs_mocap_marker_btn.setEnabled(has_single_marker)
         if not items:
             return
 
@@ -292,6 +300,266 @@ class H5Viewer(QMainWindow):
             return None
         return self._resolve_kin_q_path_from_item(selected_items[0])
 
+    def _is_mocap_marker_path(self, path: str) -> bool:
+        parts = path.split("/") if path else []
+        return len(parts) >= 2 and parts[-2:] == ["mocap", "marker"]
+
+    def _find_marker_groups(self, group_obj, prefix):
+        marker_paths = []
+        for key in sorted(group_obj.keys()):
+            child = group_obj[key]
+            child_path = f"{prefix}/{key}" if prefix else key
+            if isinstance(child, h5py.Group):
+                if self._is_mocap_marker_path(child_path):
+                    marker_paths.append(child_path)
+                marker_paths.extend(self._find_marker_groups(child, child_path))
+        return marker_paths
+
+    def _resolve_marker_path_from_item(self, item):
+        if self._h5 is None or item is None:
+            return None
+
+        obj_path = item.data(0, Qt.UserRole)
+        item_type = item.data(1, Qt.UserRole)
+        if not obj_path or item_type != "group" or obj_path not in self._h5:
+            return None
+
+        obj = self._h5[obj_path]
+        if not isinstance(obj, h5py.Group):
+            return None
+
+        if self._is_mocap_marker_path(obj_path):
+            return obj_path
+
+        marker_paths = self._find_marker_groups(obj, obj_path)
+        if len(marker_paths) == 1:
+            return marker_paths[0]
+
+        return None
+
+    def _get_selected_single_marker_path(self):
+        selected_items = self.tree.selectedItems()
+        if len(selected_items) != 1:
+            return None
+        return self._resolve_marker_path_from_item(selected_items[0])
+
+    def _get_marker_xyz(self, marker_group: h5py.Group, marker_name: str, expected_len: int = None):
+        if marker_name not in marker_group:
+            raise KeyError(f"Missing marker: {marker_name}")
+
+        marker = marker_group[marker_name]
+        if not isinstance(marker, h5py.Group):
+            raise TypeError(f"{marker_name} is not a marker group")
+
+        coords = []
+        for axis in ("x", "y", "z"):
+            if axis not in marker or not isinstance(marker[axis], h5py.Dataset):
+                raise KeyError(f"Missing dataset: {marker_name}/{axis}")
+
+            values = np.asarray(marker[axis][()]).reshape(-1).astype(float)
+            if expected_len is not None and len(values) != expected_len:
+                raise ValueError(
+                    f"Length mismatch for {marker_name}/{axis}: "
+                    f"expected={expected_len}, data={len(values)}"
+                )
+            coords.append(values)
+
+        return self._marker_xyz_to_imu_view_coordinates(np.column_stack(coords))
+
+    def _marker_xyz_to_imu_view_coordinates(self, xyz):
+        """Convert raw mocap xyz coordinates into the IMU/global visualization axes."""
+        arr = np.asarray(xyz, dtype=float)
+        transformed = np.empty_like(arr, dtype=float)
+        transformed[:, 0] = -arr[:, 1]
+        transformed[:, 1] = arr[:, 0]
+        transformed[:, 2] = arr[:, 2]
+        return transformed
+
+    def _normalize_vectors(self, vectors, eps: float = 1e-12):
+        arr = np.asarray(vectors, dtype=float)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        normalized = np.full(arr.shape, np.nan, dtype=float)
+        valid = np.isfinite(arr).all(axis=1) & (norms[:, 0] > eps)
+        normalized[valid] = arr[valid] / norms[valid]
+        return normalized, valid
+
+    def _segment_frame_from_three_markers(self, anterior, posterior, lateral, side: str):
+        local_x, x_valid = self._normalize_vectors(anterior - posterior)
+        lateral_raw = lateral - 0.5 * (anterior + posterior)
+        if side == "right":
+            lateral_raw = -lateral_raw
+
+        local_y_raw, y_raw_valid = self._normalize_vectors(lateral_raw)
+        local_z, z_valid = self._normalize_vectors(np.cross(local_x, local_y_raw))
+        local_y, y_valid = self._normalize_vectors(np.cross(local_z, local_x))
+
+        rotations = np.stack([local_x, local_y, local_z], axis=2)
+        valid = x_valid & y_raw_valid & z_valid & y_valid
+        rotations[~valid, :, :] = np.nan
+        return rotations
+
+    def _foot_frame_from_markers(self, medial_ankle, lateral_ankle, heel, toe, side: str):
+        local_x, x_valid = self._normalize_vectors(toe - heel)
+        local_y_raw = lateral_ankle - medial_ankle
+        if side == "right":
+            local_y_raw = -local_y_raw
+
+        local_y_raw, y_raw_valid = self._normalize_vectors(local_y_raw)
+        local_z, z_valid = self._normalize_vectors(np.cross(local_x, local_y_raw))
+        local_y, y_valid = self._normalize_vectors(np.cross(local_z, local_x))
+
+        rotations = np.stack([local_x, local_y, local_z], axis=2)
+        valid = x_valid & y_raw_valid & z_valid & y_valid
+        rotations[~valid, :, :] = np.nan
+        return rotations
+
+    def _rotation_matrices_to_euler_xyz(self, rotations):
+        rotations = np.asarray(rotations, dtype=float)
+        if rotations.ndim != 3 or rotations.shape[1:] != (3, 3):
+            raise ValueError("rotations must have shape (N, 3, 3)")
+
+        angles = np.full((rotations.shape[0], 3), np.nan, dtype=float)
+        valid_rows = np.isfinite(rotations).all(axis=(1, 2))
+        if not np.any(valid_rows):
+            return angles
+
+        idxs = np.where(valid_rows)[0]
+        for idx in idxs:
+            R = rotations[idx]
+            cy = np.sqrt(R[2, 1] * R[2, 1] + R[2, 2] * R[2, 2])
+            if cy > 1e-8:
+                angle_x = np.arctan2(R[2, 1], R[2, 2])
+                angle_y = np.arctan2(-R[2, 0], cy)
+                angle_z = np.arctan2(R[1, 0], R[0, 0])
+            else:
+                angle_x = np.arctan2(-R[1, 2], R[1, 1])
+                angle_y = np.arctan2(-R[2, 0], cy)
+                angle_z = 0.0
+
+            angles[idx] = np.degrees([angle_x, angle_y, angle_z])
+
+        return angles
+
+    def _global_axis_relative_rotations_from_initial(self, rotations):
+        """
+        Express each marker-derived segment frame change around the global axes.
+
+        rotations[idx] maps a segment's local XYZ frame into the mocap/global
+        frame.  R(t) @ R(0).T gives the rotation that carries the initial
+        global-frame segment orientation to the current global-frame segment
+        orientation, so the resulting Euler XYZ values describe what is seen
+        from the global axes rather than from the segment's local axes.
+        """
+        rotations = np.asarray(rotations, dtype=float)
+        if rotations.ndim != 3 or rotations.shape[1:] != (3, 3):
+            raise ValueError("rotations must have shape (N, 3, 3)")
+
+        relative = np.full(rotations.shape, np.nan, dtype=float)
+        valid_rows = np.isfinite(rotations).all(axis=(1, 2))
+        valid_indices = np.where(valid_rows)[0]
+        if len(valid_indices) == 0:
+            return relative
+
+        initial_idx = 0 if valid_rows[0] else valid_indices[0]
+        initial_rotation = rotations[initial_idx]
+
+        for idx in valid_indices:
+            relative[idx] = rotations[idx] @ initial_rotation.T
+
+        return relative
+
+    def _relative_rotations_to_initial_global(self, rotations):
+        return self._global_axis_relative_rotations_from_initial(rotations)
+
+    def _build_marker_absolute_angle_columns(self, marker_path: str, marker_group: h5py.Group):
+        rthi = self._get_marker_xyz(marker_group, "rthi")
+        expected_len = len(rthi)
+
+        markers = {
+            "rthi": rthi,
+            "rathi": self._get_marker_xyz(marker_group, "rathi", expected_len),
+            "rpthi": self._get_marker_xyz(marker_group, "rpthi", expected_len),
+            "lthi": self._get_marker_xyz(marker_group, "lthi", expected_len),
+            "lathi": self._get_marker_xyz(marker_group, "lathi", expected_len),
+            "lpthi": self._get_marker_xyz(marker_group, "lpthi", expected_len),
+            "rtib": self._get_marker_xyz(marker_group, "rtib", expected_len),
+            "ratib": self._get_marker_xyz(marker_group, "ratib", expected_len),
+            "rptib": self._get_marker_xyz(marker_group, "rptib", expected_len),
+            "ltib": self._get_marker_xyz(marker_group, "ltib", expected_len),
+            "latib": self._get_marker_xyz(marker_group, "latib", expected_len),
+            "lptib": self._get_marker_xyz(marker_group, "lptib", expected_len),
+            "rmank": self._get_marker_xyz(marker_group, "rmank", expected_len),
+            "rank": self._get_marker_xyz(marker_group, "rank", expected_len),
+            "rhee": self._get_marker_xyz(marker_group, "rhee", expected_len),
+            "rtoe": self._get_marker_xyz(marker_group, "rtoe", expected_len),
+            "lmank": self._get_marker_xyz(marker_group, "lmank", expected_len),
+            "lank": self._get_marker_xyz(marker_group, "lank", expected_len),
+            "lhee": self._get_marker_xyz(marker_group, "lhee", expected_len),
+            "ltoe": self._get_marker_xyz(marker_group, "ltoe", expected_len),
+        }
+
+        time_values = self._find_trial_timestamp(marker_path, expected_len)
+        if time_values is None:
+            raise ValueError(
+                f"timestamp not found or length mismatch for marker group: {marker_path}"
+            )
+        time_values = np.asarray(time_values, dtype=float)
+
+        segment_frames = [
+            (
+                "R Thigh",
+                self._segment_frame_from_three_markers(
+                    markers["rathi"], markers["rpthi"], markers["rthi"], "right"
+                ),
+            ),
+            (
+                "L Thigh",
+                self._segment_frame_from_three_markers(
+                    markers["lathi"], markers["lpthi"], markers["lthi"], "left"
+                ),
+            ),
+            (
+                "R Shank",
+                self._segment_frame_from_three_markers(
+                    markers["ratib"], markers["rptib"], markers["rtib"], "right"
+                ),
+            ),
+            (
+                "L Shank",
+                self._segment_frame_from_three_markers(
+                    markers["latib"], markers["lptib"], markers["ltib"], "left"
+                ),
+            ),
+            (
+                "R Foot",
+                self._foot_frame_from_markers(
+                    markers["rmank"], markers["rank"], markers["rhee"], markers["rtoe"], "right"
+                ),
+            ),
+            (
+                "L Foot",
+                self._foot_frame_from_markers(
+                    markers["lmank"], markers["lank"], markers["lhee"], markers["ltoe"], "left"
+                ),
+            ),
+        ]
+
+        headers = ["time"]
+        columns = [time_values.tolist()]
+        invalid_counts = {}
+
+        for segment_name, rotations in segment_frames:
+            relative_rotations = self._global_axis_relative_rotations_from_initial(rotations)
+            angles = self._rotation_matrices_to_euler_xyz(relative_rotations)
+            if len(angles) > 0 and np.isfinite(angles[0]).all():
+                angles[0] = 0.0
+            invalid_counts[segment_name] = int(np.isnan(angles).any(axis=1).sum())
+            for axis_idx, axis_name in enumerate(("X", "Y", "Z")):
+                headers.append(f"{segment_name} {axis_name}")
+                columns.append(angles[:, axis_idx].tolist())
+
+        return headers, columns, invalid_counts
+
     def _dataset_value_to_columns(self, name: str, value):
         if np.isscalar(value):
             return [name], [[value]]
@@ -334,6 +602,28 @@ class H5Viewer(QMainWindow):
             )
 
         return values.astype(float)
+
+    def _normalize_time_for_imu_compare(self, time_values):
+        """Return timestamps starting at 0 seconds, matching FileHandler H5 import."""
+        timestamps = np.asarray(time_values, dtype=float).reshape(-1)
+        if len(timestamps) == 0:
+            return timestamps
+
+        timestamps = timestamps - timestamps[0]
+        if len(timestamps) > 1:
+            median_dt = np.nanmedian(np.diff(timestamps))
+            # H5 common/time is stored in milliseconds; kin_q/time may already be seconds.
+            if np.isfinite(median_dt) and median_dt > 1.0:
+                timestamps = timestamps / 1000.0
+
+        return timestamps
+
+    def _initial_relative(self, values):
+        """Subtract the initial value so frame 0 matches IMU relative-angle export."""
+        arr = np.asarray(values, dtype=float).reshape(-1)
+        if len(arr) == 0:
+            return arr
+        return arr - arr[0]
 
     def export_absolute_mocap_foot_angle_data(self):
         if self._h5 is None:
@@ -388,10 +678,91 @@ class H5Viewer(QMainWindow):
         right_foot_abs = right_shank_abs + ankle_angle_r
         left_foot_abs = left_shank_abs + ankle_angle_l
 
-        default_name = f"{self._sanitize_name(kin_q_path)}__absolute_segments.csv"
+        # Match graph_view.py IMU segment export format:
+        # Timestamp starts at 0 seconds, frame 0 is zero, and sagittal-plane
+        # segment angles are placed in the Y column of the XYZ layout.
+        timestamps = self._normalize_time_for_imu_compare(time_values)
+        segment_series = [
+            ("R_Thigh", self._initial_relative(right_thigh_abs)),
+            ("L_Thigh", self._initial_relative(left_thigh_abs)),
+            ("R_Shank", self._initial_relative(right_shank_abs)),
+            ("L_Shank", self._initial_relative(left_shank_abs)),
+            ("R_Foot", self._initial_relative(right_foot_abs)),
+            ("L_Foot", self._initial_relative(left_foot_abs)),
+        ]
+
+        default_name = f"{self._sanitize_name(kin_q_path)}__imu_compare_segments.csv"
         output_file, _ = QFileDialog.getSaveFileName(
             self,
-            "Save absolute mocap segment angle CSV",
+            "Save IMU-comparable kin_q segment angle CSV",
+            str(Path.cwd() / default_name),
+            "CSV Files (*.csv)",
+        )
+        if not output_file:
+            return
+
+        if not output_file.lower().endswith('.csv'):
+            output_file += '.csv'
+
+        headers = ["Timestamp"]
+        for segment_name, _ in segment_series:
+            headers.extend([f"{segment_name}_X", f"{segment_name}_Y", f"{segment_name}_Z"])
+
+        rows = []
+        for i in range(len(timestamps)):
+            row = [timestamps[i]]
+            for _, values in segment_series:
+                row.extend([0.0, values[i], 0.0])
+            rows.append(row)
+
+        try:
+            with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+            self.status.setText("Absolute mocap foot export failed")
+            return
+
+        QMessageBox.information(
+            self,
+            "Export Completed",
+            f"Saved CSV:\n{output_file}\n\nRows: {len(rows)}\nColumns: {len(headers)}",
+        )
+
+        self.status.setText(
+            f"IMU-comparable kin_q segment export: {kin_q_path} -> {Path(output_file).name} ({len(rows)} rows)"
+        )
+
+    def export_absolute_mocap_marker_angle_data(self):
+        if self._h5 is None:
+            QMessageBox.warning(self, "No File", "Open an H5 file first.")
+            return
+
+        marker_path = self._get_selected_single_marker_path()
+        if marker_path is None:
+            QMessageBox.warning(
+                self,
+                "Invalid Selection",
+                "Select exactly one group: either mocap/marker itself or a parent(trial) containing exactly one mocap/marker.",
+            )
+            return
+
+        marker_group = self._h5[marker_path]
+        try:
+            headers, columns, invalid_counts = self._build_marker_absolute_angle_columns(
+                marker_path, marker_group
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Read Error", str(e))
+            self.status.setText("Absolute mocap marker export failed")
+            return
+
+        default_name = f"{self._sanitize_name(marker_path)}__absolute_marker_segments.csv"
+        output_file, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save absolute marker segment angle CSV",
             str(Path.cwd() / default_name),
             "CSV Files (*.csv)",
         )
@@ -402,43 +773,40 @@ class H5Viewer(QMainWindow):
             output_file += '.csv'
 
         rows = []
-        for i in range(len(time_values)):
-            rows.append([
-                time_values[i],
-                right_thigh_abs[i],
-                left_thigh_abs[i],
-                right_shank_abs[i],
-                left_shank_abs[i],
-                right_foot_abs[i],
-                left_foot_abs[i],
-            ])
+        for i in range(len(columns[0])):
+            rows.append([col[i] for col in columns])
 
         try:
             with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f)
-                writer.writerow([
-                    "time",
-                    "R Thigh",
-                    "L Thigh",
-                    "R Shank",
-                    "L Shank",
-                    "R Foot",
-                    "L Foot",
-                ])
+                writer.writerow(headers)
                 writer.writerows(rows)
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
-            self.status.setText("Absolute mocap foot export failed")
+            self.status.setText("Absolute mocap marker export failed")
             return
 
-        QMessageBox.information(
-            self,
-            "Export Completed",
-            f"Saved CSV:\n{output_file}\n\nRows: {len(rows)}\nColumns: 7",
-        )
+        invalid_summary = [
+            f"{name}: {count}" for name, count in invalid_counts.items() if count > 0
+        ]
+        if invalid_summary:
+            QMessageBox.warning(
+                self,
+                "Export Completed (with warnings)",
+                f"Saved CSV:\n{output_file}\n\n"
+                f"Rows: {len(rows)}\n"
+                f"Columns: {len(headers)}\n"
+                f"Frames with invalid angles:\n" + "\n".join(invalid_summary),
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Export Completed",
+                f"Saved CSV:\n{output_file}\n\nRows: {len(rows)}\nColumns: {len(headers)}",
+            )
 
         self.status.setText(
-            f"Absolute mocap foot export: {kin_q_path} -> {Path(output_file).name} ({len(rows)} rows)"
+            f"Absolute mocap marker export: {marker_path} -> {Path(output_file).name} ({len(rows)} rows, {len(headers)} columns)"
         )
 
     def export_mocap_angle_data(self):

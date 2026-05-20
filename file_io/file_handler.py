@@ -11,7 +11,7 @@ from typing import Optional, List, Dict
 from pathlib import Path
 
 from core.imu_data import (
-    MotionCaptureData, IMUSensorData, JointAngles, KinematicsData
+    MotionCaptureData, IMUSensorData, JointAngles, KinematicsData, MarkerData
 )
 from config.settings import app_settings
 
@@ -22,6 +22,15 @@ class FileHandler:
     # Supported file extensions
     RAW_EXTENSIONS = ['.csv', '.txt', '.dat', '.h5']  # Raw IMU data formats
     PROCESSED_EXTENSION = '.mcp'  # Motion Capture Processed data
+
+    MARKER_VISUALIZATION_NAMES = [
+        'rthi', 'rathi', 'rpthi',
+        'lthi', 'lathi', 'lpthi',
+        'rtib', 'ratib', 'rptib',
+        'ltib', 'latib', 'lptib',
+        'rmank', 'rank', 'rhee', 'rtoe',
+        'lmank', 'lank', 'lhee', 'ltoe',
+    ]
     
     @staticmethod
     def import_raw_data(filepath: str, h5_path: str = None) -> MotionCaptureData:
@@ -293,6 +302,49 @@ class FileHandler:
                 open_errors.append(f"{candidate_path} -> {e}")
 
         raise OSError("Unable to open HDF5 file. " + " | ".join(open_errors))
+
+    @staticmethod
+    def _read_h5_marker_xyz(marker_group, marker_name: str, expected_len: int) -> np.ndarray:
+        """Read one mocap marker as an (N, 3) xyz array."""
+        if marker_name not in marker_group:
+            raise KeyError(f"Missing marker: {marker_name}")
+
+        marker = marker_group[marker_name]
+        coords = []
+        for axis in ('x', 'y', 'z'):
+            if axis not in marker:
+                raise KeyError(f"Missing marker dataset: {marker_name}/{axis}")
+            values = np.asarray(marker[axis][:], dtype=float).reshape(-1)
+            if len(values) != expected_len:
+                raise ValueError(
+                    f"Length mismatch for {marker_name}/{axis}: "
+                    f"expected={expected_len}, data={len(values)}"
+                )
+            coords.append(values)
+        return np.column_stack(coords)
+
+    @staticmethod
+    def _import_h5_marker_data(trial, timestamps: np.ndarray, sampling_freq: float) -> Optional[MarkerData]:
+        """Import only the markers used for marker-based segment absolute angles."""
+        marker_path = 'mocap/marker'
+        if marker_path not in trial:
+            return None
+
+        marker_group = trial[marker_path]
+        markers = {}
+        for marker_name in FileHandler.MARKER_VISUALIZATION_NAMES:
+            markers[marker_name] = FileHandler._read_h5_marker_xyz(
+                marker_group,
+                marker_name,
+                len(timestamps)
+            )
+
+        print(f"  Loaded mocap markers for visualization: {len(markers)} markers")
+        return MarkerData(
+            timestamps=timestamps.copy(),
+            markers=markers,
+            sampling_frequency=sampling_freq
+        )
     
     @staticmethod
     def import_h5_trial(filepath: str, h5_path: str) -> MotionCaptureData:
@@ -420,6 +472,15 @@ class FileHandler:
                 data.add_imu_sensor_data(sensor_data)
                 print(f"  Loaded {location}: {n_samples} samples")
 
+            try:
+                data.marker_data = FileHandler._import_h5_marker_data(
+                    trial,
+                    timestamps,
+                    sampling_freq
+                )
+            except Exception as e:
+                print(f"  Warning: Failed to load mocap marker visualization data: {e}")
+
         print(f"Successfully imported {len(data.imu_data)} sensors from HDF5")
         return data
 
@@ -541,7 +602,8 @@ class FileHandler:
             'notes': data.notes,
             'imu_data': {},
             'joint_angles': None,
-            'kinematics': None
+            'kinematics': None,
+            'marker_data': None
         }
         
         # Save IMU data
@@ -579,6 +641,16 @@ class FileHandler:
                 'back_speed': data.kinematics.back_speed.tolist(),
                 'stride_times_right': data.kinematics.stride_times_right,
                 'stride_times_left': data.kinematics.stride_times_left
+            }
+
+        if data.marker_data:
+            save_dict['marker_data'] = {
+                'timestamps': data.marker_data.timestamps.tolist(),
+                'sampling_frequency': data.marker_data.sampling_frequency,
+                'markers': {
+                    name: values.tolist()
+                    for name, values in data.marker_data.markers.items()
+                }
             }
         
         # Save to file
@@ -666,6 +738,17 @@ class FileHandler:
                 back_speed=np.array(kd['back_speed']),
                 stride_times_right=kd['stride_times_right'],
                 stride_times_left=kd['stride_times_left']
+            )
+
+        marker_dict = save_dict.get('marker_data')
+        if marker_dict:
+            data.marker_data = MarkerData(
+                timestamps=np.array(marker_dict['timestamps']),
+                markers={
+                    name: np.array(values)
+                    for name, values in marker_dict.get('markers', {}).items()
+                },
+                sampling_frequency=marker_dict.get('sampling_frequency', 100.0)
             )
         
         print(f"Loaded processed data from {filepath}")

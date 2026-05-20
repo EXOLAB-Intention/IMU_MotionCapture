@@ -2,7 +2,7 @@
 3D visualization widget for displaying body segments using PyQtGraph
 Provides interactive 3D skeleton rendering with smooth playback
 """
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QSlider
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QSlider, QCheckBox
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt, pyqtSlot
 import numpy as np
 
@@ -40,6 +40,15 @@ class Visualization3D(QWidget):
         'shank': 0.42,     # Knee to ankle
         'foot': 0.25,      # Ankle to toe
     }
+
+    MARKER_SEGMENT_CONFIGS = [
+        ('R Thigh', 'three', ('rathi', 'rpthi', 'rthi'), 'right'),
+        ('L Thigh', 'three', ('lathi', 'lpthi', 'lthi'), 'left'),
+        ('R Shank', 'three', ('ratib', 'rptib', 'rtib'), 'right'),
+        ('L Shank', 'three', ('latib', 'lptib', 'ltib'), 'left'),
+        ('R Foot', 'foot', ('rmank', 'rank', 'rhee', 'rtoe'), 'right'),
+        ('L Foot', 'foot', ('lmank', 'lank', 'lhee', 'ltoe'), 'left'),
+    ]
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -84,6 +93,8 @@ class Visualization3D(QWidget):
         self.joint_items = {}
         self.axis_items = {}  # Segment coordinate axes
         self.foot_markers = {}  # XY foot contact markers
+        self.mocap_marker_item = None
+        self.marker_axis_items = {}
         self.grid = None  # Grid item for ground plane
         self.grid_scale = 0.4  # Store grid scale (larger for better visibility)
         
@@ -153,10 +164,20 @@ class Visualization3D(QWidget):
         self.stop_btn.clicked.connect(self._stop_playback)
         self.stop_btn.setEnabled(False)
         
+        self.show_imu_checkbox = QCheckBox("IMU skeleton")
+        self.show_imu_checkbox.setChecked(True)
+        self.show_imu_checkbox.stateChanged.connect(self._update_visibility)
+
+        self.show_marker_checkbox = QCheckBox("Markers")
+        self.show_marker_checkbox.setChecked(True)
+        self.show_marker_checkbox.stateChanged.connect(self._update_visibility)
+
         self.frame_label = QLabel("Frame: 0 / 0")
         
         controls_layout.addWidget(self.play_btn)
         controls_layout.addWidget(self.stop_btn)
+        controls_layout.addWidget(self.show_imu_checkbox)
+        controls_layout.addWidget(self.show_marker_checkbox)
         controls_layout.addStretch()
         controls_layout.addWidget(self.frame_label)
         
@@ -280,6 +301,11 @@ class Visualization3D(QWidget):
         
         self.current_data = motion_data
         self.current_frame = 0
+        self.show_imu_checkbox.setChecked(True)
+        self.show_marker_checkbox.setChecked(True)
+        self.show_marker_checkbox.setEnabled(
+            bool(motion_data and getattr(motion_data, 'marker_data', None) is not None)
+        )
         
         if motion_data and motion_data.imu_data:
             # Get number of frames from first sensor
@@ -302,6 +328,7 @@ class Visualization3D(QWidget):
         else:
             self.frame_label.setText("Frame: 0 / 0")
             self.play_btn.setEnabled(False)
+            self.show_marker_checkbox.setEnabled(False)
 
     @pyqtSlot(str)
     def refresh_view_mode(self, mode_name: str):
@@ -390,11 +417,18 @@ class Visualization3D(QWidget):
                 self.view_widget.removeItem(axis)
         for marker in self.foot_markers.values():
             self.view_widget.removeItem(marker)
+        if self.mocap_marker_item is not None:
+            self.view_widget.removeItem(self.mocap_marker_item)
+        for axes in self.marker_axis_items.values():
+            for axis in axes:
+                self.view_widget.removeItem(axis)
         
         self.skeleton_items.clear()
         self.joint_items.clear()
         self.axis_items.clear()
         self.foot_markers.clear()
+        self.mocap_marker_item = None
+        self.marker_axis_items.clear()
         
         current_mode = app_settings.mode.mode_type
         if current_mode == 'Upper-body':
@@ -494,6 +528,67 @@ class Visualization3D(QWidget):
             pxMode=True
         )
         self.view_widget.addItem(self.foot_markers['left'])
+
+        if current_mode != 'Upper-body' and getattr(self.current_data, 'marker_data', None) is not None:
+            self.mocap_marker_item = gl.GLScatterPlotItem(
+                pos=np.empty((0, 3)),
+                size=7,
+                color=(1.0, 0.9, 0.2, 1.0),
+                pxMode=True
+            )
+            self.view_widget.addItem(self.mocap_marker_item)
+
+            for segment_name, _, _, _ in self.MARKER_SEGMENT_CONFIGS:
+                x_axis = gl.GLLinePlotItem(
+                    pos=np.empty((0, 3)),
+                    color=(1, 0, 0, 1),
+                    width=3,
+                    antialias=True
+                )
+                y_axis = gl.GLLinePlotItem(
+                    pos=np.empty((0, 3)),
+                    color=(0, 1, 0, 1),
+                    width=3,
+                    antialias=True
+                )
+                z_axis = gl.GLLinePlotItem(
+                    pos=np.empty((0, 3)),
+                    color=(0, 0.45, 1, 1),
+                    width=3,
+                    antialias=True
+                )
+                self.view_widget.addItem(x_axis)
+                self.view_widget.addItem(y_axis)
+                self.view_widget.addItem(z_axis)
+                self.marker_axis_items[segment_name] = [x_axis, y_axis, z_axis]
+
+        self._update_visibility()
+
+    def _set_items_visible(self, items, visible: bool):
+        for item in items:
+            if item is not None:
+                item.setVisible(visible)
+
+    def _update_visibility(self):
+        """Apply IMU skeleton and marker overlay visibility toggles."""
+        if not PYQTGRAPH_AVAILABLE:
+            return
+
+        show_imu = self.show_imu_checkbox.isChecked()
+        imu_items = list(self.skeleton_items.values())
+        imu_items.extend(self.joint_items.values())
+        for axes in self.axis_items.values():
+            imu_items.extend(axes)
+        imu_items.extend(self.foot_markers.values())
+        self._set_items_visible(imu_items, show_imu)
+
+        show_markers = self.show_marker_checkbox.isChecked()
+        marker_items = []
+        if self.mocap_marker_item is not None:
+            marker_items.append(self.mocap_marker_item)
+        for axes in self.marker_axis_items.values():
+            marker_items.extend(axes)
+        self._set_items_visible(marker_items, show_markers)
     
     def _render_frame(self, frame_index: int):
         """
@@ -525,6 +620,9 @@ class Visualization3D(QWidget):
         
         # Update skeleton visualization
         self._update_skeleton(positions)
+
+        # Update mocap marker overlay and marker-defined segment local axes
+        self._update_mocap_markers(frame_index)
         
         # Update grid position based on foot contact
         self._update_grid_position(frame_index, positions)
@@ -985,6 +1083,130 @@ class Visualization3D(QWidget):
             self.foot_markers['left'].setData(pos=np.array([left_pos]))
         else:
             self.foot_markers['left'].setData(pos=np.empty((0, 3)))
+
+    def _marker_raw_to_view(self, raw_position: np.ndarray) -> np.ndarray:
+        """Convert mocap marker xyz(mm) into the 3D view coordinate system(m)."""
+        raw = np.asarray(raw_position, dtype=float)
+        return np.array([-raw[1], raw[0], raw[2]], dtype=float) / 1000.0
+
+    def _marker_direction_to_view(self, raw_direction: np.ndarray) -> np.ndarray:
+        """Convert a marker-frame direction into the 3D view coordinate system."""
+        raw = np.asarray(raw_direction, dtype=float)
+        return np.array([-raw[1], raw[0], raw[2]], dtype=float)
+
+    def _normalize_marker_vector(self, vector: np.ndarray):
+        vector = np.asarray(vector, dtype=float)
+        norm = np.linalg.norm(vector)
+        if not np.isfinite(vector).all() or norm <= 1e-12:
+            return None
+        return vector / norm
+
+    def _segment_frame_from_marker_points(self, anterior, posterior, lateral, side: str):
+        local_x = self._normalize_marker_vector(anterior - posterior)
+        lateral_raw = lateral - 0.5 * (anterior + posterior)
+        if side == 'right':
+            lateral_raw = -lateral_raw
+
+        local_y_raw = self._normalize_marker_vector(lateral_raw)
+        if local_x is None or local_y_raw is None:
+            return None
+
+        local_z = self._normalize_marker_vector(np.cross(local_x, local_y_raw))
+        if local_z is None:
+            return None
+
+        local_y = self._normalize_marker_vector(np.cross(local_z, local_x))
+        if local_y is None:
+            return None
+
+        return np.column_stack([local_x, local_y, local_z])
+
+    def _foot_frame_from_marker_points(self, medial_ankle, lateral_ankle, heel, toe, side: str):
+        local_x = self._normalize_marker_vector(toe - heel)
+        local_y_raw = lateral_ankle - medial_ankle
+        if side == 'right':
+            local_y_raw = -local_y_raw
+
+        local_y_raw = self._normalize_marker_vector(local_y_raw)
+        if local_x is None or local_y_raw is None:
+            return None
+
+        local_z = self._normalize_marker_vector(np.cross(local_x, local_y_raw))
+        if local_z is None:
+            return None
+
+        local_y = self._normalize_marker_vector(np.cross(local_z, local_x))
+        if local_y is None:
+            return None
+
+        return np.column_stack([local_x, local_y, local_z])
+
+    def _update_mocap_markers(self, frame_index: int):
+        """Draw marker positions and the marker-defined local axes for each segment."""
+        if not PYQTGRAPH_AVAILABLE or not self.current_data:
+            return
+
+        marker_data = getattr(self.current_data, 'marker_data', None)
+        if marker_data is None or self.mocap_marker_item is None:
+            return
+
+        if app_settings.mode.mode_type == 'Upper-body':
+            return
+
+        if frame_index >= marker_data.n_samples:
+            return
+
+        marker_positions = {}
+        marker_names = list(marker_data.markers.keys())
+        for marker_name in marker_names:
+            values = marker_data.markers[marker_name]
+            if frame_index >= len(values):
+                continue
+            raw_position = values[frame_index]
+            if np.isfinite(raw_position).all():
+                marker_positions[marker_name] = raw_position
+
+        if marker_positions:
+            positions = np.array([
+                self._marker_raw_to_view(marker_positions[name])
+                for name in marker_names
+                if name in marker_positions
+            ])
+            colors = np.array([
+                (1.0, 0.25, 0.2, 1.0) if name.startswith('r') else (0.25, 0.55, 1.0, 1.0)
+                for name in marker_names
+                if name in marker_positions
+            ])
+            self.mocap_marker_item.setData(pos=positions, color=colors)
+        else:
+            self.mocap_marker_item.setData(pos=np.empty((0, 3)))
+
+        axis_length = 0.12
+        for segment_name, frame_type, names, side in self.MARKER_SEGMENT_CONFIGS:
+            axes = self.marker_axis_items.get(segment_name)
+            if not axes:
+                continue
+
+            if any(name not in marker_positions for name in names):
+                for axis_item in axes:
+                    axis_item.setData(pos=np.empty((0, 3)))
+                continue
+
+            raw_points = [marker_positions[name] for name in names]
+            if frame_type == 'three':
+                rotation = self._segment_frame_from_marker_points(*raw_points, side)
+            else:
+                rotation = self._foot_frame_from_marker_points(*raw_points, side)
+
+            if rotation is None:
+                for axis_item in axes:
+                    axis_item.setData(pos=np.empty((0, 3)))
+                continue
+
+            origin = self._marker_raw_to_view(np.mean(np.vstack(raw_points), axis=0))
+            for axis_index, axis_item in enumerate(axes):
+                direction = self._marker_direction_to_view(rotation[:, axis_index]) * axis_length
+                axis_item.setData(pos=np.array([origin, origin + direction]))
     
     def _toggle_playback(self):
         """Toggle play/pause"""
@@ -1093,7 +1315,21 @@ class Visualization3D(QWidget):
                 self.view_widget.removeItem(item)
             for item in self.joint_items.values():
                 self.view_widget.removeItem(item)
+            for axes in self.axis_items.values():
+                for axis in axes:
+                    self.view_widget.removeItem(axis)
+            for marker in self.foot_markers.values():
+                self.view_widget.removeItem(marker)
+            if self.mocap_marker_item is not None:
+                self.view_widget.removeItem(self.mocap_marker_item)
+            for axes in self.marker_axis_items.values():
+                for axis in axes:
+                    self.view_widget.removeItem(axis)
             
             self.skeleton_items.clear()
             self.joint_items.clear()
+            self.axis_items.clear()
+            self.foot_markers.clear()
+            self.mocap_marker_item = None
+            self.marker_axis_items.clear()
 

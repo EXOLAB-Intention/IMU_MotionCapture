@@ -454,8 +454,14 @@ class GraphView(QWidget):
             # Build DataFrame
             if self.current_data.kinematics and self.current_data.kinematics.timestamps is not None:
                 timestamps = self.current_data.kinematics.timestamps
-            else:
+            elif self.current_data.joint_angles and self.current_data.joint_angles.timestamps is not None:
                 timestamps = self.current_data.joint_angles.timestamps
+            elif self.current_data.imu_data:
+                first_sensor = next(iter(self.current_data.imu_data.values()))
+                timestamps = first_sensor.timestamps
+            else:
+                QMessageBox.warning(self, "No Timestamp", "No timestamp data available to export.")
+                return
             data_dict = {'Timestamp': timestamps}
             
             # Add selected items
@@ -505,25 +511,26 @@ class GraphView(QWidget):
                     data_dict['R_FootContact'] = self.current_data.kinematics.foot_contact_right.astype(int)
                 elif item == 'L_FootContact':
                     data_dict['L_FootContact'] = self.current_data.kinematics.foot_contact_left.astype(int)
-                elif item == 'Foot_Abs_Dorsiflexion':
-                    right_thigh_y = self._compute_segment_local_y_rotation_from_initial('thigh_right')
-                    left_thigh_y = self._compute_segment_local_y_rotation_from_initial('thigh_left')
-                    right_shank_y = self._compute_segment_local_y_rotation_from_initial('shank_right')
-                    left_shank_y = self._compute_segment_local_y_rotation_from_initial('shank_left')
-                    right_local_y, left_local_y = self._compute_foot_local_y_rotation_from_initial()
+                elif item == 'Segment_Abs_GlobalXYZ':
+                    segment_configs = [
+                        ('thigh_right', 'R_Thigh'),
+                        ('thigh_left', 'L_Thigh'),
+                        ('shank_right', 'R_Shank'),
+                        ('shank_left', 'L_Shank'),
+                        ('foot_right', 'R_Foot'),
+                        ('foot_left', 'L_Foot'),
+                    ]
 
-                    if right_thigh_y is not None:
-                        data_dict['R_Thigh_LocalY_Rotation'] = self._fit_series_length(right_thigh_y, len(timestamps))
-                    if left_thigh_y is not None:
-                        data_dict['L_Thigh_LocalY_Rotation'] = self._fit_series_length(left_thigh_y, len(timestamps))
-                    if right_shank_y is not None:
-                        data_dict['R_Shank_LocalY_Rotation'] = self._fit_series_length(right_shank_y, len(timestamps))
-                    if left_shank_y is not None:
-                        data_dict['L_Shank_LocalY_Rotation'] = self._fit_series_length(left_shank_y, len(timestamps))
-                    if right_local_y is not None:
-                        data_dict['R_Foot_LocalY_Rotation'] = self._fit_series_length(right_local_y, len(timestamps))
-                    if left_local_y is not None:
-                        data_dict['L_Foot_LocalY_Rotation'] = self._fit_series_length(left_local_y, len(timestamps))
+                    for location, column_prefix in segment_configs:
+                        angles = self._compute_segment_global_xyz_rotation(location)
+                        if angles is None:
+                            continue
+
+                        for axis_idx, axis_name in enumerate(('X', 'Y', 'Z')):
+                            data_dict[f'{column_prefix}_{axis_name}'] = self._fit_series_length(
+                                angles[:, axis_idx],
+                                len(timestamps)
+                            )
             
             # Create DataFrame and save
             df = pd.DataFrame(data_dict)
@@ -546,23 +553,8 @@ class GraphView(QWidget):
         padded[:len(series)] = series
         return padded
 
-    def _compute_foot_local_y_rotation_from_initial(self):
-        """Compute foot local-y rotation from initial foot IMU orientation.
-
-        q_rel = conj(q0) * q_t is represented in the initial local frame.
-        We extract the twist component around local y-axis directly from q_rel,
-        avoiding Euler-axis ambiguity.
-        """
-        if not self.current_data or not self.current_data.imu_data:
-            return None, None
-
-        return (
-            self._compute_segment_local_y_rotation_from_initial('foot_right'),
-            self._compute_segment_local_y_rotation_from_initial('foot_left')
-        )
-
-    def _compute_segment_local_y_rotation_from_initial(self, location: str):
-        """Compute segment local-y rotation from initial quaternion for one sensor location."""
+    def _compute_segment_global_xyz_rotation(self, location: str):
+        """Compute initial-pose-relative segment rotation as XYZ Euler angles."""
         if not self.current_data or not self.current_data.imu_data:
             return None
 
@@ -573,22 +565,85 @@ class GraphView(QWidget):
             return None
 
         q_series = KinematicsProcessor.quaternion_normalize(np.asarray(sensor.quaternions, dtype=float))
-        q0 = q_series[0]
-        q_rel = KinematicsProcessor.compute_relative_quaternion(q0, q_series)
+        rotations = self._quaternions_to_rotation_matrices(q_series)
+        relative_rotations = self._relative_rotations_to_initial_global(rotations)
+        angles = self._rotation_matrices_to_euler_xyz(relative_rotations)
 
-        # Twist angle around local y axis from q_rel = [w, x, y, z].
-        q_rel = KinematicsProcessor.quaternion_normalize(q_rel)
-        w = np.asarray(q_rel[:, 0], dtype=float)
-        y = np.asarray(q_rel[:, 2], dtype=float)
-        local_y_rad = 2.0 * np.arctan2(y, w)
-        local_y_rad = np.unwrap(local_y_rad)
-        local_y_deg = np.degrees(local_y_rad)
+        if len(angles) > 0 and np.isfinite(angles[0]).all():
+            angles[0] = 0.0
 
-        if len(local_y_deg) > 0:
-            local_y_deg = local_y_deg - local_y_deg[0]
-            local_y_deg[np.abs(local_y_deg) < 1e-12] = 0.0
+        return angles
 
-        return local_y_deg
+    @staticmethod
+    def _quaternions_to_rotation_matrices(quaternions: np.ndarray) -> np.ndarray:
+        """Convert [w, x, y, z] quaternions to rotation matrices with shape (N, 3, 3)."""
+        q = np.asarray(quaternions, dtype=float)
+        if q.ndim != 2 or q.shape[1] != 4:
+            raise ValueError("quaternions must have shape (N, 4)")
+
+        w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+        rotations = np.empty((len(q), 3, 3), dtype=float)
+
+        rotations[:, 0, 0] = 1 - 2 * (y * y + z * z)
+        rotations[:, 0, 1] = 2 * (x * y - w * z)
+        rotations[:, 0, 2] = 2 * (x * z + w * y)
+
+        rotations[:, 1, 0] = 2 * (x * y + w * z)
+        rotations[:, 1, 1] = 1 - 2 * (x * x + z * z)
+        rotations[:, 1, 2] = 2 * (y * z - w * x)
+
+        rotations[:, 2, 0] = 2 * (x * z - w * y)
+        rotations[:, 2, 1] = 2 * (y * z + w * x)
+        rotations[:, 2, 2] = 1 - 2 * (x * x + y * y)
+
+        return rotations
+
+    @staticmethod
+    def _relative_rotations_to_initial_global(rotations: np.ndarray) -> np.ndarray:
+        """Express rotation change from the initial pose around global axes."""
+        rotations = np.asarray(rotations, dtype=float)
+        if rotations.ndim != 3 or rotations.shape[1:] != (3, 3):
+            raise ValueError("rotations must have shape (N, 3, 3)")
+
+        relative = np.full(rotations.shape, np.nan, dtype=float)
+        valid_rows = np.isfinite(rotations).all(axis=(1, 2))
+        valid_indices = np.where(valid_rows)[0]
+        if len(valid_indices) == 0:
+            return relative
+
+        initial_idx = 0 if valid_rows[0] else valid_indices[0]
+        initial_rotation = rotations[initial_idx]
+
+        for idx in valid_indices:
+            relative[idx] = rotations[idx] @ initial_rotation.T
+
+        return relative
+
+    @staticmethod
+    def _rotation_matrices_to_euler_xyz(rotations: np.ndarray) -> np.ndarray:
+        """Convert rotation matrices to XYZ Euler angles in degrees."""
+        rotations = np.asarray(rotations, dtype=float)
+        if rotations.ndim != 3 or rotations.shape[1:] != (3, 3):
+            raise ValueError("rotations must have shape (N, 3, 3)")
+
+        angles = np.full((rotations.shape[0], 3), np.nan, dtype=float)
+        valid_rows = np.isfinite(rotations).all(axis=(1, 2))
+        for idx in np.where(valid_rows)[0]:
+            R = rotations[idx]
+            cy = np.sqrt(R[2, 1] * R[2, 1] + R[2, 2] * R[2, 2])
+
+            if cy > 1e-8:
+                angle_x = np.arctan2(R[2, 1], R[2, 2])
+                angle_y = np.arctan2(-R[2, 0], cy)
+                angle_z = np.arctan2(R[1, 0], R[0, 0])
+            else:
+                angle_x = np.arctan2(-R[1, 2], R[1, 1])
+                angle_y = np.arctan2(-R[2, 0], cy)
+                angle_z = 0.0
+
+            angles[idx] = np.degrees([angle_x, angle_y, angle_z])
+
+        return angles
     
     def clear(self):
         """Clear graph"""
@@ -656,9 +711,9 @@ class ExportCSVDialog(QDialog):
         abs_group = QGroupBox("Segment Absolute")
         abs_layout = QVBoxLayout()
 
-        foot_abs_cb = QCheckBox("Thigh/Shank/Foot Local-Y Rotation (green axis, from initial quaternion)")
-        self.check_items['Foot_Abs_Dorsiflexion'] = foot_abs_cb
-        abs_layout.addWidget(foot_abs_cb)
+        segment_abs_cb = QCheckBox("Thigh/Shank/Foot XYZ Rotation (from initial pose)")
+        self.check_items['Segment_Abs_GlobalXYZ'] = segment_abs_cb
+        abs_layout.addWidget(segment_abs_cb)
 
         abs_group.setLayout(abs_layout)
         layout.addWidget(abs_group)

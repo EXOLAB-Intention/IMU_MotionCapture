@@ -142,6 +142,19 @@ class KinematicsData:
 
 
 @dataclass
+class MarkerData:
+    """Motion capture marker positions for visualization."""
+    timestamps: np.ndarray  # (N,)
+    markers: Dict[str, np.ndarray] = field(default_factory=dict)  # marker -> (N, 3)
+    sampling_frequency: float = 100.0
+
+    @property
+    def n_samples(self) -> int:
+        """Number of marker samples."""
+        return len(self.timestamps)
+
+
+@dataclass
 class MotionCaptureData:
     """Complete motion capture session data"""
     # Metadata
@@ -155,6 +168,7 @@ class MotionCaptureData:
     # Processed data
     joint_angles: Optional[JointAngles] = None
     kinematics: Optional[KinematicsData] = None
+    marker_data: Optional[MarkerData] = None
     
     # Gait parameters
     gait_start_frame: Optional[int] = None  # Frame where first foot leaves contact

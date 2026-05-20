@@ -24,7 +24,7 @@ class CalibrationProcessor:
 
     Two filter type methods:
     - VRU-AHS: Yaw-reset only. q_offset = pure yaw rotation, applied LEFT: q_offset * q_measured
-    - North-Reference: Full orientation alignment. q_offset = conj(q_calib) * q_desired, applied RIGHT: q_measured * q_offset
+    - North-Reference: Sensor-to-segment alignment applied RIGHT, then common heading correction applied LEFT
     """
     
     CALIBRATION_EXTENSION = '.cal'
@@ -199,6 +199,7 @@ class CalibrationProcessor:
         self.desired_quaternions: Dict[str, np.ndarray] = {}   # q_desired (ideal orientation)
         self.calib_quaternions: Dict[str, np.ndarray] = {}     # q_calib (average at N-pose)
         self.heading_offset: Optional[np.ndarray] = None
+        self.heading_correction: Optional[np.ndarray] = None
         self.is_calibrated = False
         self.pose_type: Optional[str] = None
         self.filter_type: str = "North-Reference"  # "North-Reference" or "VRU-AHS"
@@ -207,13 +208,17 @@ class CalibrationProcessor:
         self.subject_id: Optional[str] = None
     
     @staticmethod
-    def _extract_heading_quaternion(q: np.ndarray) -> np.ndarray:
+    def _extract_heading_quaternion(
+        q: np.ndarray,
+        local_forward: Optional[np.ndarray] = None
+    ) -> np.ndarray:
         """Extract only the heading (yaw/Z-rotation) component from a quaternion."""
-        w, x, y, z = q
-        
         R = KinematicsProcessor.quaternion_to_rotation_matrix(q)
-        
-        local_forward = np.array([1.0, 0.0, 0.0])
+
+        if local_forward is None:
+            local_forward = np.array([1.0, 0.0, 0.0])
+        local_forward = local_forward / np.linalg.norm(local_forward)
+
         global_forward = R @ local_forward
         yaw = np.arctan2(global_forward[1], global_forward[0])
         
@@ -240,10 +245,15 @@ class CalibrationProcessor:
         Perform calibration pose processing.
 
         Two filter type methods:
-        - North-Reference: Full orientation alignment via desired quaternions and RIGHT mult.
+        - North-Reference: Full orientation alignment via desired quaternions and heading reset.
         - VRU-AHS: Yaw-reset calibration. Zeros each sensor's heading (yaw) via LEFT mult.
         """
         self.filter_type = filter_type
+        self.offset_quaternions = {}
+        self.desired_quaternions = {}
+        self.calib_quaternions = {}
+        self.heading_offset = None
+        self.heading_correction = None
         print(f"Calibrating with {pose_type} [{filter_type}] in {mode} mode from {start_time:.2f}s to {end_time:.2f}s")
         
         for location, sensor_data in data.imu_data.items():
@@ -263,7 +273,7 @@ class CalibrationProcessor:
             q_calib = KinematicsProcessor._average_quaternions(calib_quats_norm)
             self.calib_quaternions[location] = q_calib.copy()
 
-        # Determine walking direction from back local +Z (project to global XY)
+        # Estimate the subject's initial forward/progression direction from back local +Z.
         walking_dir = np.array([1.0, 0.0, 0.0])
         if 'back' in self.calib_quaternions:
             q_back = self.calib_quaternions['back']
@@ -301,10 +311,20 @@ class CalibrationProcessor:
         else:
             # ========================================
             # North-Reference: Full orientation alignment
-            # Desired quaternions from walking direction + pose type.
-            # Applied via RIGHT multiplication: q_segment = q_measured * q_offset
+            # 1) Sensor-to-segment mounting offset is applied on the RIGHT:
+            #      q_mounted = q_measured * q_offset
+            # 2) Initial subject heading is reset to global +X with a common LEFT yaw:
+            #      q_segment = q_heading_correction * q_mounted
             # ========================================
             desired_quats = self._get_desired_quaternions(mode, pose_type, walking_dir)
+
+            initial_yaw = np.arctan2(walking_dir[1], walking_dir[0])
+            self.heading_correction = np.array([
+                np.cos(-initial_yaw / 2),
+                0.0,
+                0.0,
+                np.sin(-initial_yaw / 2)
+            ])
 
             for location, q_calib in self.calib_quaternions.items():
                 if location in desired_quats:
@@ -326,7 +346,10 @@ class CalibrationProcessor:
             # Extract heading offset from back
             if 'back' in self.calib_quaternions:
                 q_back = self.calib_quaternions['back']
-                q_heading = self._extract_heading_quaternion(q_back)
+                q_heading = self._extract_heading_quaternion(
+                    q_back,
+                    local_forward=np.array([0.0, 0.0, 1.0])
+                )
                 self.heading_offset = q_heading.copy()
                 heading_angle = 2 * np.arctan2(q_heading[3], q_heading[0]) * 180 / np.pi
                 print(f"  Back heading: {heading_angle:.1f} from global X")
@@ -353,7 +376,7 @@ class CalibrationProcessor:
         Apply calibration offset to a single quaternion.
 
         VRU-AHS: q_segment = q_offset * q_measured (LEFT multiplication)
-        North-Reference: q_segment = q_measured * q_offset (RIGHT multiplication)
+        North-Reference: q_segment = q_heading_correction * (q_measured * q_offset)
         """
         if not self.is_calibrated or location not in self.offset_quaternions:
             return quaternion
@@ -363,6 +386,8 @@ class CalibrationProcessor:
             q_segment = KinematicsProcessor.quaternion_multiply(q_offset, quaternion)
         else:
             q_segment = KinematicsProcessor.quaternion_multiply(quaternion, q_offset)
+            if self.heading_correction is not None:
+                q_segment = KinematicsProcessor.quaternion_multiply(self.heading_correction, q_segment)
         q_segment = q_segment / np.linalg.norm(q_segment)
         return q_segment
 
@@ -412,12 +437,13 @@ class CalibrationProcessor:
         
         # Prepare calibration data
         calib_data = {
-            'version': '5.0',  # Version 5.0: adds filter_type (VRU-AHS / North-Reference)
+            'version': '6.0',  # Version 6.0: adds common heading_correction for North-Reference
             'pose_type': self.pose_type,
             'filter_type': self.filter_type,
             'calibration_time': self.calibration_time.isoformat() if self.calibration_time else None,
             'subject_id': self.subject_id,
             'heading_offset': self.heading_offset.tolist() if self.heading_offset is not None else None,
+            'heading_correction': self.heading_correction.tolist() if self.heading_correction is not None else None,
             'offset_quaternions': {},
             'desired_quaternions': {},
             'calib_quaternions': {}
@@ -482,6 +508,12 @@ class CalibrationProcessor:
             heading_angle = 2 * np.arctan2(self.heading_offset[3], self.heading_offset[0]) * 180 / np.pi
             print(f"  Heading offset: {-heading_angle:.1f}°")
         
+        self.heading_correction = None
+        if 'heading_correction' in calib_data and calib_data['heading_correction'] is not None:
+            self.heading_correction = np.array(calib_data['heading_correction'])
+        elif self.heading_offset is not None and calib_data.get('filter_type', 'North-Reference') == 'North-Reference':
+            self.heading_correction = KinematicsProcessor.quaternion_conjugate(self.heading_offset)
+
         self.pose_type = calib_data.get('pose_type')
         self.filter_type = calib_data.get('filter_type', 'North-Reference')  # Default for older .cal files
         self.subject_id = calib_data.get('subject_id')
@@ -507,12 +539,12 @@ class CalibrationProcessor:
         Apply calibration to motion capture data.
 
         VRU-AHS: q_segment = q_offset * q_measured (LEFT multiplication)
-        North-Reference: q_segment = q_measured * q_offset (RIGHT multiplication)
+        North-Reference: q_segment = q_heading_correction * (q_measured * q_offset)
         """
         if not self.is_calibrated:
             raise ValueError("No calibration loaded. Load calibration first.")
 
-        mult_side = "LEFT" if self.filter_type == "VRU-AHS" else "RIGHT"
+        mult_side = "LEFT" if self.filter_type == "VRU-AHS" else "RIGHT + LEFT heading"
         print(f"Applying {self.pose_type} [{self.filter_type}] calibration to data: {data.session_id}")
         print(f"  Pipeline: {mult_side} multiplication")
 
@@ -540,6 +572,8 @@ class CalibrationProcessor:
                 q_segment = KinematicsProcessor.quaternion_multiply(q_offset, q_measured_norm)
             else:
                 q_segment = KinematicsProcessor.quaternion_multiply(q_measured_norm, q_offset)
+                if self.heading_correction is not None:
+                    q_segment = KinematicsProcessor.quaternion_multiply(self.heading_correction, q_segment)
             q_segment = KinematicsProcessor.quaternion_normalize(q_segment)
 
             sensor_data.quaternions = q_segment
