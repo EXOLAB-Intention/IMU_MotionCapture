@@ -7,7 +7,7 @@ import json
 import pickle
 import numpy as np
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from pathlib import Path
 
 from core.imu_data import (
@@ -30,6 +30,26 @@ class FileHandler:
         'ltib', 'latib', 'lptib',
         'rmank', 'rank', 'rhee', 'rtoe',
         'lmank', 'lank', 'lhee', 'ltoe',
+    ]
+
+    H5_TRIAL_SENSOR_MAP = [
+        ('back',        0, ['robot/imu/back_imu', 'robot/imu/xsens/back_imu', 'robot/back_imu']),
+        ('thigh_left',  1, ['robot/imu/thigh_imu/left', 'robot/imu/xsens/thigh_imu/left', 'robot/thigh_imu/left']),
+        ('thigh_right', 2, ['robot/imu/thigh_imu/right', 'robot/imu/xsens/thigh_imu/right', 'robot/thigh_imu/right']),
+        ('shank_left',  3, ['robot/imu/shank_imu/left', 'robot/imu/xsens/shank_imu/left', 'robot/shank_imu/left']),
+        ('shank_right', 4, ['robot/imu/shank_imu/right', 'robot/imu/xsens/shank_imu/right', 'robot/shank_imu/right']),
+        ('foot_left',   5, ['robot/imu/foot_imu/left', 'robot/imu/xsens/foot_imu/left', 'robot/foot_imu/left']),
+        ('foot_right',  6, ['robot/imu/foot_imu/right', 'robot/imu/xsens/foot_imu/right', 'robot/foot_imu/right']),
+    ]
+
+    H5_NEUTRAL_POSE_SENSOR_MAP = [
+        ('back',        0, ['back_imu']),
+        ('thigh_left',  1, ['thigh_imu/left']),
+        ('thigh_right', 2, ['thigh_imu/right']),
+        ('shank_left',  3, ['shank_imu/left']),
+        ('shank_right', 4, ['shank_imu/right']),
+        ('foot_left',   5, ['foot_imu/left']),
+        ('foot_right',  6, ['foot_imu/right']),
     ]
     
     @staticmethod
@@ -304,24 +324,55 @@ class FileHandler:
         raise OSError("Unable to open HDF5 file. " + " | ".join(open_errors))
 
     @staticmethod
-    def _read_h5_marker_xyz(marker_group, marker_name: str, expected_len: int) -> np.ndarray:
-        """Read one mocap marker as an (N, 3) xyz array."""
-        if marker_name not in marker_group:
-            raise KeyError(f"Missing marker: {marker_name}")
+    def _resolve_h5_marker_group(marker_group, marker_name: str):
+        """Resolve a marker group, accepting legacy lowercase and new uppercase names."""
+        candidates = [marker_name, marker_name.lower(), marker_name.upper()]
+        for candidate in candidates:
+            if candidate in marker_group:
+                return marker_group[candidate], candidate
 
-        marker = marker_group[marker_name]
+        lower_lookup = {str(key).lower(): key for key in marker_group.keys()}
+        resolved = lower_lookup.get(marker_name.lower())
+        if resolved is not None:
+            return marker_group[resolved], resolved
+
+        raise KeyError(f"Missing marker: {marker_name}")
+
+    @staticmethod
+    def _fit_h5_timeseries_length(values: np.ndarray, expected_len: int, label: str) -> np.ndarray:
+        """Trim H5 series to the selected timeline; short series are treated as invalid."""
+        arr = np.asarray(values, dtype=float)
+        if len(arr) == expected_len:
+            return arr
+        if len(arr) > expected_len:
+            print(
+                f"  Warning: Trimming {label} from {len(arr)} to {expected_len} samples"
+            )
+            return arr[:expected_len]
+        raise ValueError(
+            f"Length mismatch for {label}: expected at least {expected_len}, data={len(arr)}"
+        )
+
+    @staticmethod
+    def _read_h5_marker_xyz(marker_group, marker_name: str, expected_len: int = None) -> np.ndarray:
+        """Read one mocap marker as a raw (N, 3) xyz array."""
+        marker, resolved_name = FileHandler._resolve_h5_marker_group(marker_group, marker_name)
+
         coords = []
+        lengths = []
         for axis in ('x', 'y', 'z'):
             if axis not in marker:
-                raise KeyError(f"Missing marker dataset: {marker_name}/{axis}")
+                raise KeyError(f"Missing marker dataset: {resolved_name}/{axis}")
             values = np.asarray(marker[axis][:], dtype=float).reshape(-1)
-            if len(values) != expected_len:
-                raise ValueError(
-                    f"Length mismatch for {marker_name}/{axis}: "
-                    f"expected={expected_len}, data={len(values)}"
-                )
             coords.append(values)
-        return np.column_stack(coords)
+            lengths.append(len(values))
+
+        target_len = expected_len if expected_len is not None else min(lengths)
+        fitted = [
+            FileHandler._fit_h5_timeseries_length(values, target_len, f"{resolved_name}/{axis}")
+            for values, axis in zip(coords, ('x', 'y', 'z'))
+        ]
+        return np.column_stack(fitted)
 
     @staticmethod
     def _import_h5_marker_data(trial, timestamps: np.ndarray, sampling_freq: float) -> Optional[MarkerData]:
@@ -331,20 +382,367 @@ class FileHandler:
             return None
 
         marker_group = trial[marker_path]
+        marker_lengths = []
+        for marker_name in FileHandler.MARKER_VISUALIZATION_NAMES:
+            try:
+                marker_lengths.append(
+                    len(FileHandler._read_h5_marker_xyz(marker_group, marker_name))
+                )
+            except Exception as e:
+                print(f"  Warning: Marker {marker_name} unavailable: {e}")
+
+        if not marker_lengths:
+            return None
+
+        marker_len = min(marker_lengths)
         markers = {}
         for marker_name in FileHandler.MARKER_VISUALIZATION_NAMES:
-            markers[marker_name] = FileHandler._read_h5_marker_xyz(
-                marker_group,
-                marker_name,
-                len(timestamps)
+            try:
+                markers[marker_name] = FileHandler._read_h5_marker_xyz(
+                    marker_group,
+                    marker_name,
+                    marker_len
+                )
+            except Exception as e:
+                print(f"  Warning: Skipping marker {marker_name}: {e}")
+
+        if not markers:
+            return None
+
+        if len(timestamps) >= marker_len:
+            marker_timestamps = timestamps[:marker_len].copy()
+        else:
+            marker_timestamps = np.arange(marker_len, dtype=float) / sampling_freq
+
+        if marker_len != len(timestamps):
+            print(
+                f"  Warning: Mocap marker length differs from IMU timeline "
+                f"(markers={marker_len}, imu={len(timestamps)}); using marker-specific timeline"
             )
 
         print(f"  Loaded mocap markers for visualization: {len(markers)} markers")
         return MarkerData(
-            timestamps=timestamps.copy(),
+            timestamps=marker_timestamps,
             markers=markers,
             sampling_frequency=sampling_freq
         )
+
+    @staticmethod
+    def _resolve_h5_group(container, candidate_paths: List[str]):
+        """Resolve the first existing group path inside an HDF5 container."""
+        for candidate in candidate_paths:
+            try:
+                return container[candidate], candidate
+            except KeyError:
+                continue
+        return None, None
+
+    @staticmethod
+    def _looks_like_h5_trial_group(group) -> bool:
+        """Return True when a group looks like an importable motion trial."""
+        return any(key in group for key in ('robot', 'mocap', 'common', 'kin_q'))
+
+    @staticmethod
+    def _get_h5_sensor_sample_count(sensor_grp, resolved_path: str) -> int:
+        """Return the IMU sample count after checking the core quaternion datasets."""
+        quat_keys = ['quat_w', 'quat_x', 'quat_y', 'quat_z']
+        missing = [key for key in quat_keys if key not in sensor_grp]
+        if missing:
+            raise ValueError(f"Sensor {resolved_path} missing datasets: {missing}")
+
+        lengths = [len(np.asarray(sensor_grp[key][:]).reshape(-1)) for key in quat_keys]
+        if len(set(lengths)) != 1:
+            raise ValueError(f"Inconsistent quaternion lengths for {resolved_path}: {lengths}")
+        return lengths[0]
+
+    @staticmethod
+    def _score_h5_stand_trial_motion(trial) -> float:
+        """
+        Score how still a stand trial is.
+
+        Lower scores are better. The score is the median, across available IMUs,
+        of the 95th percentile quaternion angle change from the first frame.
+        """
+        sensor_scores = []
+
+        for _, _, candidate_paths in FileHandler.H5_TRIAL_SENSOR_MAP:
+            sensor_grp, _ = FileHandler._resolve_h5_group(trial, candidate_paths)
+            if sensor_grp is None:
+                continue
+
+            quat_keys = ['quat_w', 'quat_x', 'quat_y', 'quat_z']
+            if any(key not in sensor_grp for key in quat_keys):
+                continue
+
+            quaternions = np.column_stack([
+                np.asarray(sensor_grp[key][:], dtype=float).reshape(-1)
+                for key in quat_keys
+            ])
+            if len(quaternions) < 2:
+                continue
+
+            stride = max(1, len(quaternions) // 5000)
+            q = quaternions[::stride]
+            norms = np.linalg.norm(q, axis=1, keepdims=True)
+            valid = np.isfinite(q).all(axis=1) & (norms[:, 0] > 1e-12)
+            q = q[valid] / norms[valid]
+            if len(q) < 2:
+                continue
+
+            q0 = q[0]
+            dots = np.abs(q @ q0)
+            dots = np.clip(dots, -1.0, 1.0)
+            angle_change = np.degrees(2.0 * np.arccos(dots))
+            sensor_scores.append(float(np.nanpercentile(angle_change, 95)))
+
+        if not sensor_scores:
+            return float('inf')
+
+        return float(np.nanmedian(sensor_scores))
+
+    @staticmethod
+    def _resolve_h5_trial_timestamps(trial, h5_path: str) -> Tuple[np.ndarray, float, str]:
+        """
+        Resolve a trial timestamp vector.
+
+        Legacy S009 H5 files provide common/time. The combined ImuMarker H5 does
+        not, so use a generated 100 Hz timeline from the available IMU length.
+        """
+        if 'common/time' in trial:
+            time_values = np.asarray(trial['common/time'][:], dtype=float).reshape(-1)
+            if len(time_values) == 0:
+                raise ValueError(f"Empty common/time dataset for {h5_path}")
+
+            raw_dt = np.diff(time_values)
+            if np.any(raw_dt <= 0):
+                n_bad = np.sum(raw_dt <= 0)
+                print(f"  Warning: {n_bad} non-monotonic time steps detected")
+
+            timestamps = time_values - time_values[0]
+            sampling_freq = 100.0
+            if len(raw_dt) > 0:
+                median_dt = float(np.nanmedian(raw_dt))
+                if np.isfinite(median_dt) and median_dt > 0:
+                    if median_dt > 1.0:
+                        timestamps = timestamps / 1000.0
+                        sampling_freq = 1000.0 / median_dt
+                    else:
+                        sampling_freq = 1.0 / median_dt
+                    if abs(sampling_freq - 100.0) > 10.0:
+                        print(
+                            f"  Warning: Estimated sampling frequency is "
+                            f"{sampling_freq:.2f} Hz (expected about 100 Hz)"
+                        )
+
+            return timestamps, sampling_freq, "common/time"
+
+        counts = []
+        for _, _, candidate_paths in FileHandler.H5_TRIAL_SENSOR_MAP:
+            sensor_grp, resolved_path = FileHandler._resolve_h5_group(trial, candidate_paths)
+            if sensor_grp is None:
+                continue
+            counts.append(FileHandler._get_h5_sensor_sample_count(sensor_grp, resolved_path))
+
+        if not counts:
+            raise ValueError(f"No usable IMU timestamp source found for {h5_path}")
+
+        n_samples = min(counts)
+        if len(set(counts)) != 1:
+            print(
+                f"  Warning: IMU sensor lengths differ for {h5_path}: {counts}; "
+                f"using shortest length {n_samples}"
+            )
+
+        sampling_freq = 100.0
+        timestamps = np.arange(n_samples, dtype=float) / sampling_freq
+        return timestamps, sampling_freq, "generated 100 Hz"
+
+    @staticmethod
+    def _build_h5_imu_sensor_data(
+        sensor_grp,
+        location: str,
+        sensor_id: int,
+        timestamps: np.ndarray,
+        sampling_freq: float,
+        resolved_path: str
+    ) -> IMUSensorData:
+        """Build one IMUSensorData object from an HDF5 IMU group."""
+        required = [
+            'quat_w', 'quat_x', 'quat_y', 'quat_z',
+            'accel_x', 'accel_y', 'accel_z',
+            'gyro_x', 'gyro_y', 'gyro_z'
+        ]
+        missing = [d for d in required if d not in sensor_grp]
+        if missing:
+            raise ValueError(f"Sensor {resolved_path} missing datasets: {missing}")
+
+        quaternions = np.column_stack([
+            sensor_grp['quat_w'][:],
+            sensor_grp['quat_x'][:],
+            sensor_grp['quat_y'][:],
+            sensor_grp['quat_z'][:]
+        ])
+
+        accelerations = np.column_stack([
+            sensor_grp['accel_x'][:],
+            sensor_grp['accel_y'][:],
+            sensor_grp['accel_z'][:]
+        ])
+
+        gyroscopes = np.column_stack([
+            sensor_grp['gyro_x'][:],
+            sensor_grp['gyro_y'][:],
+            sensor_grp['gyro_z'][:]
+        ])
+
+        n_samples = len(timestamps)
+        quaternions = FileHandler._fit_h5_timeseries_length(
+            quaternions, n_samples, f"{resolved_path}/quaternion"
+        )
+        accelerations = FileHandler._fit_h5_timeseries_length(
+            accelerations, n_samples, f"{resolved_path}/acceleration"
+        )
+        gyroscopes = FileHandler._fit_h5_timeseries_length(
+            gyroscopes, n_samples, f"{resolved_path}/gyroscope"
+        )
+
+        return IMUSensorData(
+            sensor_id=sensor_id,
+            location=location,
+            timestamps=timestamps.copy(),
+            quaternions=quaternions,
+            accelerations=accelerations,
+            gyroscopes=gyroscopes,
+            sampling_frequency=sampling_freq
+        )
+
+    @staticmethod
+    def import_h5_neutral_pose(filepath: str, subject_id: str) -> MotionCaptureData:
+        """
+        Import subject-level neutral pose IMU data from an HDF5 file.
+
+        The neutral pose is stored outside motion trials at
+        ``<subject_id>/sub_info/neutral_pose``. Use it as the shared calibration
+        source for that subject instead of treating each trial's first frames as
+        a trial-specific calibration pose.
+        """
+        neutral_path = f"{subject_id}/sub_info/neutral_pose"
+        data = MotionCaptureData(
+            session_id=f"{subject_id}_neutral_pose",
+            creation_time=datetime.now(),
+            subject_id=subject_id
+        )
+
+        print(f"Importing HDF5 neutral pose: {filepath} [{neutral_path}]")
+
+        with FileHandler._open_h5_file(filepath, 'r') as f:
+            if neutral_path not in f:
+                raise ValueError(f"Neutral pose path '{neutral_path}' not found in HDF5 file")
+
+            neutral = f[neutral_path]
+            first_group = None
+            for _, _, candidate_paths in FileHandler.H5_NEUTRAL_POSE_SENSOR_MAP:
+                first_group, _ = FileHandler._resolve_h5_group(neutral, candidate_paths)
+                if first_group is not None:
+                    break
+
+            if first_group is None or 'quat_w' not in first_group:
+                raise ValueError(f"No usable neutral-pose IMU data found at '{neutral_path}'")
+
+            n_samples = len(first_group['quat_w'])
+            sampling_freq = 100.0
+            timestamps = np.arange(n_samples, dtype=float) / sampling_freq
+
+            print(f"  Time range: {timestamps[0]:.3f}s to {timestamps[-1]:.3f}s ({n_samples} samples)")
+            print(f"  Sampling frequency: {sampling_freq} Hz (generated)")
+
+            for location, sensor_id, candidate_paths in FileHandler.H5_NEUTRAL_POSE_SENSOR_MAP:
+                sensor_grp, resolved_path = FileHandler._resolve_h5_group(neutral, candidate_paths)
+                if sensor_grp is None:
+                    print(
+                        f"  Warning: Neutral-pose sensor for {location} not found "
+                        f"(tried: {', '.join(candidate_paths)}), skipping"
+                    )
+                    continue
+
+                sensor_data = FileHandler._build_h5_imu_sensor_data(
+                    sensor_grp,
+                    location,
+                    sensor_id,
+                    timestamps,
+                    sampling_freq,
+                    f"{neutral_path}/{resolved_path}"
+                )
+                data.add_imu_sensor_data(sensor_data)
+                print(f"  Loaded neutral {location}: {n_samples} samples")
+
+        print(f"Successfully imported {len(data.imu_data)} neutral-pose sensors from HDF5")
+        return data
+
+    @staticmethod
+    def find_h5_calibration_pose(filepath: str, subject_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Find the best H5 calibration source for a subject.
+
+        Preference order:
+        1. <subject>/sub_info/neutral_pose for legacy per-subject calibration.
+        2. The stillest stand trial for combined ImuMarker.
+        """
+        neutral_path = f"{subject_id}/sub_info/neutral_pose"
+
+        with FileHandler._open_h5_file(filepath, 'r') as f:
+            if neutral_path in f:
+                return neutral_path, "neutral_pose"
+
+            stand_root = f"{subject_id}/stand"
+            if stand_root not in f:
+                return None, None
+
+            stand_group = f[stand_root]
+            stand_candidates = []
+            for level in sorted(stand_group.keys()):
+                level_group = stand_group[level]
+                if not hasattr(level_group, 'keys'):
+                    continue
+                for trial_id in sorted(level_group.keys()):
+                    trial_group = level_group[trial_id]
+                    if hasattr(trial_group, 'keys') and FileHandler._looks_like_h5_trial_group(trial_group):
+                        stand_path = f"{stand_root}/{level}/{trial_id}"
+                        score = FileHandler._score_h5_stand_trial_motion(trial_group)
+                        stand_candidates.append((score, stand_path))
+
+            if stand_candidates:
+                stand_candidates.sort(key=lambda item: (item[0], item[1]))
+                best_score, best_path = stand_candidates[0]
+                if len(stand_candidates) > 1:
+                    summary = ", ".join(
+                        f"{path}={score:.2f}deg"
+                        for score, path in stand_candidates[:5]
+                    )
+                    if len(stand_candidates) > 5:
+                        summary += ", ..."
+                    print(
+                        f"  Selected stand calibration for {subject_id}: "
+                        f"{best_path} (motion score={best_score:.2f}deg; candidates: {summary})"
+                    )
+                return best_path, "stand_trial"
+
+        return None, None
+
+    @staticmethod
+    def import_h5_calibration_pose(filepath: str, subject_id: str) -> Tuple[MotionCaptureData, str, str]:
+        """Import the selected H5 calibration source for a subject."""
+        calibration_path, source_type = FileHandler.find_h5_calibration_pose(filepath, subject_id)
+        if calibration_path is None or source_type is None:
+            raise ValueError(f"No H5 calibration pose found for {subject_id}")
+
+        if source_type == "neutral_pose":
+            return FileHandler.import_h5_neutral_pose(filepath, subject_id), source_type, calibration_path
+
+        calibration_data = FileHandler.import_h5_trial(filepath, calibration_path)
+        calibration_data.session_id = f"{subject_id}_stand_calibration"
+        calibration_data.subject_id = subject_id
+        return calibration_data, source_type, calibration_path
     
     @staticmethod
     def import_h5_trial(filepath: str, h5_path: str) -> MotionCaptureData:
@@ -383,46 +781,19 @@ class FileHandler:
             trial = f[h5_path]
 
             # Read timestamps (milliseconds → seconds, normalized to start at 0)
-            time_ms = trial['common/time'][:]
-            timestamps = (time_ms - time_ms[0]) / 1000.0  # ms to seconds
+            timestamps, sampling_freq, timestamp_source = FileHandler._resolve_h5_trial_timestamps(
+                trial,
+                h5_path
+            )
             n_samples = len(timestamps)
-            sampling_freq = 100.0  # 100 Hz (10ms intervals)
-
-            # Validate time monotonicity
-            dt = np.diff(time_ms)
-            if np.any(dt <= 0):
-                n_bad = np.sum(dt <= 0)
-                print(f"  Warning: {n_bad} non-monotonic time steps detected")
-            mean_dt = np.mean(dt)
-            if abs(mean_dt - 10.0) > 1.0:
-                print(f"  Warning: Mean time step is {mean_dt:.2f}ms (expected 10ms)")
 
             print(f"  Time range: {timestamps[0]:.3f}s to {timestamps[-1]:.3f}s ({n_samples} samples)")
-            print(f"  Sampling frequency: {sampling_freq} Hz")
+            print(f"  Sampling frequency: {sampling_freq:.2f} Hz ({timestamp_source})")
 
-            # Sensor mapping with path fallbacks: prefer new robot/imu/*, then legacy robot/*
-            # hip_imu is skipped (not used in lower-body pipeline)
-            sensor_map = [
-                ('back',        0, ['robot/imu/back_imu',       'robot/back_imu']),
-                ('thigh_left',  1, ['robot/imu/thigh_imu/left', 'robot/thigh_imu/left']),
-                ('thigh_right', 2, ['robot/imu/thigh_imu/right','robot/thigh_imu/right']),
-                ('shank_left',  3, ['robot/imu/shank_imu/left', 'robot/shank_imu/left']),
-                ('shank_right', 4, ['robot/imu/shank_imu/right','robot/shank_imu/right']),
-                ('foot_left',   5, ['robot/imu/foot_imu/left',  'robot/foot_imu/left']),
-                ('foot_right',  6, ['robot/imu/foot_imu/right', 'robot/foot_imu/right']),
-            ]
+            sensor_map = FileHandler.H5_TRIAL_SENSOR_MAP
 
             for location, sensor_id, candidate_paths in sensor_map:
-                sensor_grp = None
-                resolved_path = None
-
-                for candidate in candidate_paths:
-                    try:
-                        sensor_grp = trial[candidate]
-                        resolved_path = candidate
-                        break
-                    except KeyError:
-                        continue
+                sensor_grp, resolved_path = FileHandler._resolve_h5_group(trial, candidate_paths)
 
                 if sensor_grp is None:
                     print(
@@ -459,6 +830,16 @@ class FileHandler:
                     sensor_grp['gyro_y'][:],
                     sensor_grp['gyro_z'][:]
                 ])
+
+                quaternions = FileHandler._fit_h5_timeseries_length(
+                    quaternions, n_samples, f"{resolved_path}/quaternion"
+                )
+                accelerations = FileHandler._fit_h5_timeseries_length(
+                    accelerations, n_samples, f"{resolved_path}/acceleration"
+                )
+                gyroscopes = FileHandler._fit_h5_timeseries_length(
+                    gyroscopes, n_samples, f"{resolved_path}/gyroscope"
+                )
 
                 sensor_data = IMUSensorData(
                     sensor_id=sensor_id,
@@ -521,7 +902,10 @@ class FileHandler:
 
                             trials = sorted([
                                 t for t in level_grp
-                                if isinstance(level_grp[t], h5py.Group)
+                                if (
+                                    isinstance(level_grp[t], h5py.Group)
+                                    and FileHandler._looks_like_h5_trial_group(level_grp[t])
+                                )
                             ])
                             structure[subject_id][activity][level] = trials
 
@@ -547,7 +931,7 @@ class FileHandler:
         with FileHandler._open_h5_file(filepath, 'r') as f:
             si_path = f"{subject_id}/sub_info"
             if si_path not in f:
-                raise ValueError(f"sub_info not found for {subject_id}")
+                return {}
 
             si = f[si_path]
             info = {}

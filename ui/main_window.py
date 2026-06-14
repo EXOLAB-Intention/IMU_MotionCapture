@@ -29,7 +29,7 @@ class MainWindow(QMainWindow):
         self.current_file_path = None
         self.file_handler = FileHandler()
         self.data_processor = DataProcessor()
-        self.h5_calibrations = {}  # {subject_id: CalibrationProcessor} for H5 per-subject persistence
+        self.h5_calibrations = {}  # {(h5_filepath, subject_id, calibration_path): CalibrationProcessor}
         
         self._init_ui()
         self._connect_signals()
@@ -226,11 +226,65 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Could not load H5 subject info: {e}")
 
-            self.statusBar().showMessage(f"Imported H5 trial: {h5_path}", 3000)
+            calibration_source = self._load_h5_calibration(h5_filepath, subject_id)
+            if calibration_source:
+                self.statusBar().showMessage(
+                    f"Imported H5 trial and loaded H5 calibration ({calibration_source}): {h5_path}",
+                    3000
+                )
+            else:
+                self.statusBar().showMessage(f"Imported H5 trial: {h5_path}", 3000)
 
         except Exception as e:
             QMessageBox.critical(self, "H5 Import Error", f"Failed to import H5 trial:\n{str(e)}")
             self.statusBar().showMessage("H5 import failed", 3000)
+
+    def _load_h5_calibration(self, h5_filepath: str, subject_id: str):
+        """Load subject-level H5 calibration when available."""
+        abs_path = os.path.abspath(h5_filepath)
+
+        try:
+            calibration_path, source_type = FileHandler.find_h5_calibration_pose(h5_filepath, subject_id)
+            if calibration_path is None or source_type is None:
+                print(f"No H5 calibration pose found for {subject_id}")
+                return None
+
+            cache_key = (abs_path, subject_id, calibration_path)
+            if cache_key not in self.h5_calibrations:
+                from core.calibration import CalibrationProcessor
+
+                calibration_data, source_type, calibration_path = FileHandler.import_h5_calibration_pose(
+                    h5_filepath,
+                    subject_id
+                )
+                start_time, end_time = calibration_data.get_time_range()
+
+                calibration = CalibrationProcessor()
+                calibration.subject_id = subject_id
+                calibration.calibrate(
+                    calibration_data,
+                    start_time,
+                    end_time,
+                    pose_type="N-pose",
+                    mode=app_settings.mode.mode_type,
+                    filter_type="North-Reference"
+                )
+                calibration.subject_id = subject_id
+                self.h5_calibrations[cache_key] = calibration
+
+            self.data_processor.calibration_processor = self.h5_calibrations[cache_key]
+            self._update_calibration_status()
+            if source_type == "neutral_pose":
+                return "neutral pose"
+            return f"stand trial {calibration_path}"
+
+        except Exception as e:
+            print(f"No H5 calibration loaded for {subject_id}: {e}")
+            return None
+
+    def _load_h5_neutral_pose_calibration(self, h5_filepath: str, subject_id: str) -> bool:
+        """Backward-compatible wrapper for older callers."""
+        return self._load_h5_calibration(h5_filepath, subject_id) is not None
 
     @pyqtSlot(str)
     def open_file(self, filepath: str):

@@ -343,26 +343,43 @@ class H5Viewer(QMainWindow):
             return None
         return self._resolve_marker_path_from_item(selected_items[0])
 
-    def _get_marker_xyz(self, marker_group: h5py.Group, marker_name: str, expected_len: int = None):
-        if marker_name not in marker_group:
-            raise KeyError(f"Missing marker: {marker_name}")
+    def _resolve_marker_group(self, marker_group: h5py.Group, marker_name: str):
+        candidates = [marker_name, marker_name.lower(), marker_name.upper()]
+        for candidate in candidates:
+            if candidate in marker_group:
+                return marker_group[candidate], candidate
 
-        marker = marker_group[marker_name]
+        lower_lookup = {str(key).lower(): key for key in marker_group.keys()}
+        resolved = lower_lookup.get(marker_name.lower())
+        if resolved is not None:
+            return marker_group[resolved], resolved
+
+        raise KeyError(f"Missing marker: {marker_name}")
+
+    def _get_marker_xyz(self, marker_group: h5py.Group, marker_name: str, expected_len: int = None):
+        marker, resolved_name = self._resolve_marker_group(marker_group, marker_name)
+
         if not isinstance(marker, h5py.Group):
-            raise TypeError(f"{marker_name} is not a marker group")
+            raise TypeError(f"{resolved_name} is not a marker group")
 
         coords = []
         for axis in ("x", "y", "z"):
             if axis not in marker or not isinstance(marker[axis], h5py.Dataset):
-                raise KeyError(f"Missing dataset: {marker_name}/{axis}")
+                raise KeyError(f"Missing dataset: {resolved_name}/{axis}")
 
             values = np.asarray(marker[axis][()]).reshape(-1).astype(float)
-            if expected_len is not None and len(values) != expected_len:
+            if expected_len is not None and len(values) > expected_len:
+                values = values[:expected_len]
+            elif expected_len is not None and len(values) != expected_len:
                 raise ValueError(
-                    f"Length mismatch for {marker_name}/{axis}: "
+                    f"Length mismatch for {resolved_name}/{axis}: "
                     f"expected={expected_len}, data={len(values)}"
                 )
             coords.append(values)
+
+        if expected_len is None:
+            target_len = min(len(values) for values in coords)
+            coords = [values[:target_len] for values in coords]
 
         return self._marker_xyz_to_imu_view_coordinates(np.column_stack(coords))
 
@@ -472,37 +489,28 @@ class H5Viewer(QMainWindow):
         return self._global_axis_relative_rotations_from_initial(rotations)
 
     def _build_marker_absolute_angle_columns(self, marker_path: str, marker_group: h5py.Group):
-        rthi = self._get_marker_xyz(marker_group, "rthi")
-        expected_len = len(rthi)
+        marker_names = [
+            "rthi", "rathi", "rpthi",
+            "lthi", "lathi", "lpthi",
+            "rtib", "ratib", "rptib",
+            "ltib", "latib", "lptib",
+            "rmank", "rank", "rhee", "rtoe",
+            "lmank", "lank", "lhee", "ltoe",
+        ]
 
         markers = {
-            "rthi": rthi,
-            "rathi": self._get_marker_xyz(marker_group, "rathi", expected_len),
-            "rpthi": self._get_marker_xyz(marker_group, "rpthi", expected_len),
-            "lthi": self._get_marker_xyz(marker_group, "lthi", expected_len),
-            "lathi": self._get_marker_xyz(marker_group, "lathi", expected_len),
-            "lpthi": self._get_marker_xyz(marker_group, "lpthi", expected_len),
-            "rtib": self._get_marker_xyz(marker_group, "rtib", expected_len),
-            "ratib": self._get_marker_xyz(marker_group, "ratib", expected_len),
-            "rptib": self._get_marker_xyz(marker_group, "rptib", expected_len),
-            "ltib": self._get_marker_xyz(marker_group, "ltib", expected_len),
-            "latib": self._get_marker_xyz(marker_group, "latib", expected_len),
-            "lptib": self._get_marker_xyz(marker_group, "lptib", expected_len),
-            "rmank": self._get_marker_xyz(marker_group, "rmank", expected_len),
-            "rank": self._get_marker_xyz(marker_group, "rank", expected_len),
-            "rhee": self._get_marker_xyz(marker_group, "rhee", expected_len),
-            "rtoe": self._get_marker_xyz(marker_group, "rtoe", expected_len),
-            "lmank": self._get_marker_xyz(marker_group, "lmank", expected_len),
-            "lank": self._get_marker_xyz(marker_group, "lank", expected_len),
-            "lhee": self._get_marker_xyz(marker_group, "lhee", expected_len),
-            "ltoe": self._get_marker_xyz(marker_group, "ltoe", expected_len),
+            marker_name: self._get_marker_xyz(marker_group, marker_name)
+            for marker_name in marker_names
+        }
+        expected_len = min(len(values) for values in markers.values())
+        markers = {
+            marker_name: values[:expected_len]
+            for marker_name, values in markers.items()
         }
 
         time_values = self._find_trial_timestamp(marker_path, expected_len)
         if time_values is None:
-            raise ValueError(
-                f"timestamp not found or length mismatch for marker group: {marker_path}"
-            )
+            time_values = np.arange(expected_len, dtype=float) / 100.0
         time_values = np.asarray(time_values, dtype=float)
 
         segment_frames = [

@@ -1157,14 +1157,15 @@ class Visualization3D(QWidget):
             return
 
         marker_positions = {}
-        marker_names = list(marker_data.markers.keys())
-        for marker_name in marker_names:
-            values = marker_data.markers[marker_name]
+        marker_names = []
+        for marker_name, values in marker_data.markers.items():
+            marker_key = marker_name.lower()
             if frame_index >= len(values):
                 continue
             raw_position = values[frame_index]
             if np.isfinite(raw_position).all():
-                marker_positions[marker_name] = raw_position
+                marker_positions[marker_key] = raw_position
+                marker_names.append(marker_key)
 
         if marker_positions:
             positions = np.array([
@@ -1173,7 +1174,7 @@ class Visualization3D(QWidget):
                 if name in marker_positions
             ])
             colors = np.array([
-                (1.0, 0.25, 0.2, 1.0) if name.startswith('r') else (0.25, 0.55, 1.0, 1.0)
+                (1.0, 0.25, 0.2, 1.0) if name.lower().startswith('r') else (0.25, 0.55, 1.0, 1.0)
                 for name in marker_names
                 if name in marker_positions
             ])
